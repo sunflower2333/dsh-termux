@@ -7,7 +7,7 @@ The release package is generated from the published `@deepseek-ai/dsh` npm packa
 2. **koffi process helper on API 24**
    Bionic only exposes `posix_spawn` file actions from API 28, while the package targets API 24. Koffi's internal command helper is disabled with `ENOSYS` below API 28; dsh's FFI path does not call this helper.
 3. **koffi native build**
-   The npm package has no Android ARM64 prebuild. It is compiled with Android NDK, API 24, ARM64 and the shared C++ runtime.
+   The npm package has no Android ARM64 prebuild. It is compiled with Android NDK, API 24, ARM64 and the shared C++ runtime. Node-API symbols remain unresolved in the shared object so Android's dynamic loader can bind them from the Node process when the addon is loaded.
 4. **node-pty native build**
    The npm package has no `prebuilds/android-arm64/pty.node`. It is cross-compiled with node-gyp and the NDK. The Linux-only `-lutil` link is disabled because Android provides the PTY APIs through Bionic.
 5. **sharp WASM runtime**

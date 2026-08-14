@@ -76,6 +76,16 @@ bool ExecuteCommandLine(const char *cmd_line, const ExecuteInfo &info,`,
   "koffi: close Android command execution guard",
 );
 
+await replaceOnce(
+  "node_modules/koffi/src/koffi/CMakeLists.txt",
+  "    target_link_options(koffi PRIVATE -Wl,--gc-sections)",
+  `    target_link_options(koffi PRIVATE -Wl,--gc-sections)
+    if(ANDROID)
+        target_link_options(koffi PRIVATE -Wl,--unresolved-symbols=ignore-all)
+    endif()`,
+  "koffi: resolve Node-API symbols at module load time on Android",
+);
+
 const { readdir } = await import("node:fs/promises");
 const profileBootMatches = [];
 for (const name of await readdir(join(root, "lib"))) {

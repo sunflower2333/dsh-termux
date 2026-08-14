@@ -35,6 +35,7 @@ if (profileFiles.length !== 1) throw new Error(`expected one profile-boot implem
 const checks = [
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "defined(__ANDROID__)"],
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "__ANDROID_API__ < 28"],
+  [join("node_modules", "koffi", "src", "koffi", "CMakeLists.txt"), "--unresolved-symbols=ignore-all"],
   [join("lib", profileFiles[0]), "process.execArgv.includes(\"--expose-internals\")"],
   [join("node_modules", "@deepseek-ai", "dsh-session-persistence-jsonl", "lib", "index.js"), "process.platform === \"android\""],
 ];
