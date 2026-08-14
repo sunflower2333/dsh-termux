@@ -22,20 +22,18 @@ cat > "$BUILD_ROOT/package.json" <<JSON
   "private": true,
   "dependencies": {
     "@deepseek-ai/dsh": "$UPSTREAM_VERSION"
-  },
-  "devDependencies": {
-    "node-gyp": "12.4.0"
   }
 }
 JSON
 
-npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional
+npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional --os=android --cpu=arm64
+npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts "node-gyp@12.4.0"
 
 ESBUILD_VERSION="$(node -p "require('$BUILD_ROOT/node_modules/esbuild/package.json').version")"
 SHARP_VERSION="$(node -p "require('$BUILD_ROOT/node_modules/sharp/package.json').version")"
-npm install --prefix "$BUILD_ROOT" --ignore-scripts --save-exact --force \
-  "@esbuild/android-arm64@$ESBUILD_VERSION" \
+npm install --prefix "$BUILD_ROOT" --ignore-scripts --no-save --force --os=android --cpu=arm64 \
   "@img/sharp-wasm32@$SHARP_VERSION"
+node -e "const p=require('$BUILD_ROOT/node_modules/@esbuild/android-arm64/package.json'); if (p.version !== '$ESBUILD_VERSION') throw new Error('esbuild Android package version mismatch')"
 
 cp -a "$BUILD_ROOT/node_modules/@deepseek-ai/dsh/." "$PACKAGE_DIR/"
 cp -a "$BUILD_ROOT/node_modules" "$PACKAGE_DIR/node_modules"
@@ -44,18 +42,24 @@ rm -rf "$PACKAGE_DIR/node_modules/@deepseek-ai/dsh"
 node scripts/patch-dsh.mjs "$PACKAGE_DIR"
 
 KOFFI="$PACKAGE_DIR/node_modules/koffi"
-KOFFI_BUILD="$KOFFI/build/koffi/android_arm64/v${NODE_TARGET_VERSION}_ndk/Release"
-cmake -S "$KOFFI/src/koffi" -B "$KOFFI_BUILD" -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-  -DANDROID_ABI="$ANDROID_ABI" \
-  -DANDROID_PLATFORM="android-$ANDROID_API" \
-  -DANDROID_STL=c++_shared \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DNODE_JS_EXECPATH="$(command -v node)" \
-  -DNODE_JS_INCLUDE_DIRS="$KOFFI/vendor/node-api-headers/include"
-cmake --build "$KOFFI_BUILD" --config Release
-mkdir -p "$KOFFI/build/koffi/android_arm64"
-cp "$KOFFI_BUILD/Output/koffi.node" "$KOFFI/build/koffi/android_arm64/koffi.node"
+REAL_CMAKE="$(command -v cmake)"
+mkdir -p "$BUILD_ROOT/cmake-wrapper"
+cat > "$BUILD_ROOT/cmake-wrapper/cmake" <<WRAPPER
+#!/usr/bin/env bash
+set -e
+if [[ "\${1:-}" == "--version" || "\${1:-}" == "--build" ]]; then
+  exec "$REAL_CMAKE" "\$@"
+fi
+exec "$REAL_CMAKE" "\$@" \\
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \\
+  -DANDROID_ABI="$ANDROID_ABI" \\
+  -DANDROID_PLATFORM="android-$ANDROID_API" \\
+  -DANDROID_STL=c++_shared
+WRAPPER
+chmod +x "$BUILD_ROOT/cmake-wrapper/cmake"
+PATH="$BUILD_ROOT/cmake-wrapper:$PATH" node "$KOFFI/cnoke.cjs" \
+  -P "$KOFFI" -D "$KOFFI/src/koffi" -t android_arm64 \
+  --runtime "$NODE_TARGET_VERSION" --release
 
 NODE_PTY="$PACKAGE_DIR/node_modules/node-pty"
 NODE_HEADERS="$BUILD_ROOT/node-headers"
@@ -76,7 +80,7 @@ export GYP_DEFINES="OS=android target_arch=arm64 host_os=linux host_arch=x64 and
 
 cp "$NODE_PTY/binding.gyp" "$NODE_PTY/binding.gyp.upstream"
 node scripts/patch-node-pty-gyp.mjs "$NODE_PTY/binding.gyp"
-(cd "$NODE_PTY" && node "$BUILD_ROOT/node_modules/node-gyp/bin/node-gyp.js" rebuild \
+(cd "$NODE_PTY" && node "$BUILD_ROOT/tools/node_modules/node-gyp/bin/node-gyp.js" rebuild \
   --arch=arm64 --nodedir="$NODE_HEADERS")
 mv "$NODE_PTY/binding.gyp.upstream" "$NODE_PTY/binding.gyp"
 
