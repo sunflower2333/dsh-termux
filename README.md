@@ -7,7 +7,7 @@
 ## 安装（Termux）
 
 ```bash
-npm i -g https://github.com/sunflower2333/dsh-termux/releases/latest/download/dsh-termux-0.1.0-rc.6-termux.3.tgz
+npm i -g https://github.com/sunflower2333/dsh-termux/releases/latest/download/dsh-termux.tgz
 dsh --version   # → 0.1.0-rc.6-termux.3
 dsh web         # 启动 Web UI
 ```
@@ -31,6 +31,12 @@ pkg install python nodejs-lts
 ## 重新打包
 
 ```bash
-./pack-dsh-termux.sh            # 从全局安装的 @deepseek-ai/dsh 重新打包（含本地修改）
-./ssh-test-target.sh <tgz>      # 远程测试机全量验证
+ANDROID_NDK_HOME=/path/to/android-ndk-r29 \
+	UPSTREAM_VERSION=0.1.0-rc.6 \
+	TERMUX_REVISION=4 \
+	bash scripts/build-termux.sh
 ```
+
+构建使用 Android NDK r29、API 24、ARM64。完整补丁说明见 [PATCHES.md](PATCHES.md)。
+
+GitHub Actions 每周一检查 npm 上的 `@deepseek-ai/dsh`。发现新上游版本时会自动应用补丁、交叉编译原生模块、生成离线 npm tarball 并创建 GitHub Release。也可以在 Actions 页面手动运行 `Build Termux release`，勾选 `force` 为当前上游版本递增 `termux.N`。

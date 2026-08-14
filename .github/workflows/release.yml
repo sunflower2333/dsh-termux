@@ -1,0 +1,119 @@
+name: Build Termux release
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: "Upstream @deepseek-ai/dsh version (blank = latest)"
+        required: false
+        type: string
+      force:
+        description: "Build even when this upstream version already has a release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dsh-termux-release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.version.outputs.build }}
+      upstream: ${{ steps.version.outputs.upstream }}
+      revision: ${{ steps.version.outputs.revision }}
+      termux: ${{ steps.version.outputs.termux }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_UPSTREAM: ${{ inputs.upstream_version }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          upstream="${INPUT_UPSTREAM:-}"
+          if [[ -z "$upstream" ]]; then
+            upstream="$(npm view @deepseek-ai/dsh version)"
+          fi
+
+          mapfile -t tags < <(gh release list --limit 100 --json tagName --jq '.[].tagName')
+          revision=1
+          found=false
+          for tag in "${tags[@]}"; do
+            if [[ "$tag" =~ ^v${upstream//./\.}-termux\.([0-9]+)$ ]]; then
+              found=true
+              candidate="${BASH_REMATCH[1]}"
+              if (( candidate >= revision )); then revision=$((candidate + 1)); fi
+            fi
+          done
+
+          build=true
+          if [[ "$found" == true && "${INPUT_FORCE:-false}" != true ]]; then build=false; fi
+          termux="${upstream}-termux.${revision}"
+          {
+            echo "build=$build"
+            echo "upstream=$upstream"
+            echo "revision=$revision"
+            echo "termux=$termux"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.18.0
+      - name: Install Android NDK
+        uses: android-actions/setup-android@v3
+      - run: sdkmanager "ndk;29.0.14206865"
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+      - name: Build offline Termux package
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+          UPSTREAM_VERSION: ${{ needs.check.outputs.upstream }}
+          TERMUX_REVISION: ${{ needs.check.outputs.revision }}
+        run: bash scripts/build-termux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-termux-${{ needs.check.outputs.termux }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: dsh-termux-${{ needs.check.outputs.termux }}
+          path: dist
+      - name: Create release notes
+        run: bash scripts/release-notes.sh "${{ needs.check.outputs.termux }}" "${{ needs.check.outputs.upstream }}" > release-notes.md
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.check.outputs.termux }}" \
+            "dist/dsh-termux-${{ needs.check.outputs.termux }}.tgz" \
+            "dist/dsh-termux-${{ needs.check.outputs.termux }}.tgz.sha256" \
+            "dist/dsh-termux.tgz" \
+            --title "dsh-termux ${{ needs.check.outputs.termux }}" \
+            --notes-file release-notes.md \
+            --latest
