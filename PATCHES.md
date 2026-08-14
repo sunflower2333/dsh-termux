@@ -9,7 +9,7 @@ The release package is generated from the published `@deepseek-ai/dsh` npm packa
 3. **koffi native build**
    The npm package has no Android ARM64 prebuild. It is compiled with Android NDK, API 24, ARM64 and the shared C++ runtime. Node-API symbols remain unresolved in the shared object so Android's dynamic loader can bind them from the Node process when the addon is loaded.
 4. **node-pty native build**
-   The npm package has no `prebuilds/android-arm64/pty.node`. It is cross-compiled with node-gyp and the NDK. The Linux-only `-lutil` link is disabled because Android provides the PTY APIs through Bionic.
+   The npm package has no `prebuilds/android-arm64/pty.node`. It is cross-compiled with node-gyp and the NDK, then copied into that npm-whitelisted prebuild directory so the final tarball retains it. The Linux-only `-lutil` link is disabled because Android provides the PTY APIs through Bionic.
 5. **sharp WASM runtime**
    Sharp has no Android native package. `@img/sharp-wasm32` is included and sharp automatically falls back to it.
 6. **esbuild Android binary**

@@ -15,7 +15,7 @@ if (manifest.name !== "dsh-termux" || manifest.version !== expectedVersion) {
 
 const required = [
   "lib/bin.js",
-  "node_modules/node-pty/build/Release/pty.node",
+  "node_modules/node-pty/prebuilds/android-arm64/pty.node",
   "node_modules/koffi/build/koffi/android_arm64/koffi.node",
   "node_modules/@esbuild/android-arm64/bin/esbuild",
   "node_modules/@img/sharp-wasm32/lib",

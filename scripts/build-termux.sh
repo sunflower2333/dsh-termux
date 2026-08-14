@@ -108,15 +108,20 @@ node scripts/patch-node-pty-gyp.mjs "$NODE_PTY/binding.gyp"
 (cd "$NODE_PTY" && node "$BUILD_ROOT/tools/node_modules/node-gyp/bin/node-gyp.js" rebuild \
   --arch=arm64 --nodedir="$NODE_HEADERS")
 mv "$NODE_PTY/binding.gyp.upstream" "$NODE_PTY/binding.gyp"
+mkdir -p "$NODE_PTY/prebuilds/android-arm64"
+cp "$NODE_PTY/build/Release/pty.node" "$NODE_PTY/prebuilds/android-arm64/pty.node"
+
 
 node scripts/prepare-package.mjs "$PACKAGE_DIR" "$TERMUX_VERSION"
 node scripts/verify-package.mjs "$PACKAGE_DIR" "$TERMUX_VERSION"
 
-file "$NODE_PTY/build/Release/pty.node" | grep -F "ARM aarch64"
+file "$NODE_PTY/prebuilds/android-arm64/pty.node" | grep -F "ARM aarch64"
 file "$KOFFI/build/koffi/android_arm64/koffi.node" | grep -F "ARM aarch64"
 
 (cd "$PACKAGE_DIR" && npm pack --pack-destination "$OUTPUT_DIR")
-sha256sum "$OUTPUT_DIR/dsh-termux-${TERMUX_VERSION}.tgz" > "$OUTPUT_DIR/dsh-termux-${TERMUX_VERSION}.tgz.sha256"
+tar -tzf "$OUTPUT_DIR/dsh-termux-${TERMUX_VERSION}.tgz" \
+  | grep -Fx "package/node_modules/node-pty/prebuilds/android-arm64/pty.node"
+(cd "$OUTPUT_DIR" && sha256sum "dsh-termux-${TERMUX_VERSION}.tgz" > "dsh-termux-${TERMUX_VERSION}.tgz.sha256")
 cp "$OUTPUT_DIR/dsh-termux-${TERMUX_VERSION}.tgz" "$OUTPUT_DIR/dsh-termux.tgz"
 printf '%s\n' "$UPSTREAM_VERSION" > "$OUTPUT_DIR/upstream-version.txt"
 printf '%s\n' "$TERMUX_VERSION" > "$OUTPUT_DIR/termux-version.txt"

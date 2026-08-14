@@ -8,7 +8,7 @@
 
 ```bash
 npm i -g https://github.com/sunflower2333/dsh-termux/releases/latest/download/dsh-termux.tgz
-dsh --version   # → 0.1.0-rc.6-termux.3
+dsh --version   # → <upstream-version>-termux.<revision>
 dsh web         # 启动 Web UI
 ```
 
