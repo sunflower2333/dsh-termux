@@ -23,6 +23,11 @@ pkg install python nodejs-lts
 - 原生模块按 **Node v24.18.0（nodejs-lts）** 编译，请勿安装 `nodejs`（v26）
 - `python` 供 node-gyp 构建原生模块使用
 
+## 已知限制
+
+- **不支持容器 / 沙箱隔离模式**：Termux（Android）上没有可用的沙箱后端（bubblewrap / Landlock 等），dsh 的容器化命令隔离无法启用。
+- **运行命令需要授权**：无沙箱环境下，命令执行依赖**手动审批**（Manual Approval）或 **Full Access**（完整访问权限）配置才能正常运行，否则命令会被拒绝执行。
+
 ## 重新打包
 
 ```bash
