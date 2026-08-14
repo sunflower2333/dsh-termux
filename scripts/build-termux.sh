@@ -29,9 +29,29 @@ JSON
 npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional --os=android --cpu=arm64
 npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts "node-gyp@12.4.0"
 
-ESBUILD_VERSION="$(node -p "require('$BUILD_ROOT/node_modules/esbuild/package.json').version")"
-SHARP_VERSION="$(node -p "require('$BUILD_ROOT/node_modules/sharp/package.json').version")"
+find_package_version() {
+  local package_name="$1"
+  local manifests=()
+  local versions=()
+  mapfile -t manifests < <(find "$BUILD_ROOT/node_modules" -path "*/node_modules/$package_name/package.json" -type f)
+  if (( ${#manifests[@]} == 0 )); then
+    echo "cannot find installed package $package_name" >&2
+    return 1
+  fi
+  mapfile -t versions < <(printf '%s\n' "${manifests[@]}" | xargs -n1 node -p "require(process.argv[1]).version" | sort -u)
+  if (( ${#versions[@]} != 1 )); then
+    echo "expected one installed $package_name version, found: ${versions[*]}" >&2
+    return 1
+  fi
+  printf '%s\n' "${versions[0]}"
+}
+
+ESBUILD_VERSION="$(find_package_version esbuild)"
+SHARP_VERSION="$(find_package_version sharp)"
 npm install --prefix "$BUILD_ROOT" --ignore-scripts --no-save --force --os=android --cpu=arm64 \
+  "esbuild@$ESBUILD_VERSION" \
+  "sharp@$SHARP_VERSION" \
+  "@esbuild/android-arm64@$ESBUILD_VERSION" \
   "@img/sharp-wasm32@$SHARP_VERSION"
 node -e "const p=require('$BUILD_ROOT/node_modules/@esbuild/android-arm64/package.json'); if (p.version !== '$ESBUILD_VERSION') throw new Error('esbuild Android package version mismatch')"
 
