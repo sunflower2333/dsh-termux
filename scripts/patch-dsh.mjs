@@ -39,6 +39,43 @@ if (koffiMatches.length !== 1) {
 await writeFile(koffiFilename, koffiSource.replace(...koffiMatches[0]));
 console.log("patched: koffi: use fstatat fallback on Android");
 
+await replaceOnce(
+  koffiPath,
+  `bool ExecuteCommandLine(const char *cmd_line, const ExecuteInfo &info,
+                        FunctionRef<Span<const uint8_t>()> in_func,
+                        FunctionRef<void(Span<uint8_t> buf)> out_func, int *out_code)
+{
+    BlockAllocator temp_alloc;`,
+  `bool ExecuteCommandLine(const char *cmd_line, const ExecuteInfo &info,
+                        FunctionRef<Span<const uint8_t>()> in_func,
+                        FunctionRef<void(Span<uint8_t> buf)> out_func, int *out_code)
+{
+#if defined(__ANDROID__) && __ANDROID_API__ < 28
+    errno = ENOSYS;
+    return false;
+#else
+    BlockAllocator temp_alloc;`,
+  "koffi: disable command execution below Android API 28",
+);
+
+await replaceOnce(
+  koffiPath,
+  `    return true;
+}
+
+#endif
+
+bool ExecuteCommandLine(const char *cmd_line, const ExecuteInfo &info,`,
+  `    return true;
+#endif
+}
+
+#endif
+
+bool ExecuteCommandLine(const char *cmd_line, const ExecuteInfo &info,`,
+  "koffi: close Android command execution guard",
+);
+
 const { readdir } = await import("node:fs/promises");
 const profileBootMatches = [];
 for (const name of await readdir(join(root, "lib"))) {
