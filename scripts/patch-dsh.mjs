@@ -19,12 +19,25 @@ async function replaceOnce(relativePath, before, after, label) {
   console.log(`patched: ${label}`);
 }
 
-await replaceOnce(
-  "node_modules/koffi/lib/native/base/base.cc",
-  "#if defined(__linux__)\n    const char *pathname = filename;",
-  "#if defined(__linux__) && !defined(__ANDROID__)\n    const char *pathname = filename;",
-  "koffi: use fstatat fallback on Android",
-);
+const koffiPath = "node_modules/koffi/lib/native/base/base.cc";
+const koffiFilename = join(root, koffiPath);
+const koffiSource = await readFile(koffiFilename, "utf8");
+const koffiVariants = [
+  [
+    "#if defined(__linux__)\n    const char *pathname = filename;",
+    "#if defined(__linux__) && !defined(__ANDROID__)\n    const char *pathname = filename;",
+  ],
+  [
+    "#if defined(__linux__) && defined(STATX_TYPE) && !defined(CORE_NO_STATX)\n    const char *pathname = filename;",
+    "#if defined(__linux__) && !defined(__ANDROID__) && defined(STATX_TYPE) && !defined(CORE_NO_STATX)\n    const char *pathname = filename;",
+  ],
+];
+const koffiMatches = koffiVariants.filter(([before]) => koffiSource.split(before).length - 1 === 1);
+if (koffiMatches.length !== 1) {
+  throw new Error(`koffi: expected exactly one known statx condition in ${koffiPath}, found ${koffiMatches.length}`);
+}
+await writeFile(koffiFilename, koffiSource.replace(...koffiMatches[0]));
+console.log("patched: koffi: use fstatat fallback on Android");
 
 const { readdir } = await import("node:fs/promises");
 const profileBootMatches = [];
