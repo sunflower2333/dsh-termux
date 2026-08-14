@@ -14,10 +14,14 @@ dsh web         # 启动 Web UI
 
 卸载：`npm uninstall -g dsh-termux`
 
-## 要求
+## 要求（Termux）
 
-- Termux（**Android arm64**）
-- **Node 24**（`pkg install nodejs`；原生模块按 Node v24.18.0 编译）
+```bash
+pkg install python nodejs-lts
+```
+
+- 原生模块按 **Node v24.18.0（nodejs-lts）** 编译，请勿安装 `nodejs`（v26）
+- `python` 供 node-gyp 构建原生模块使用
 
 ## 重新打包
 
