@@ -26,40 +26,33 @@ cat > "$BUILD_ROOT/package.json" <<JSON
 }
 JSON
 
-npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional --os=android --cpu=arm64
-npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts "node-gyp@12.4.0"
-
-find_dependency_range() {
+find_lock_version() {
   local package_name="$1"
-  local manifests=()
   local ranges=()
-  mapfile -t manifests < <(find "$BUILD_ROOT/node_modules" -name package.json -type f)
-  mapfile -t ranges < <(printf '%s\n' "${manifests[@]}" | node -e '
-    const fs = require("node:fs");
-    const packageName = process.argv[1];
-    const paths = fs.readFileSync(0, "utf8").trim().split("\n").filter(Boolean);
-    for (const path of paths) {
-      const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
-      const range = manifest.dependencies?.[packageName] ?? manifest.optionalDependencies?.[packageName];
-      if (range) process.stdout.write(`${range}\n`);
-    }
-  ' "$package_name" | sort -u)
+  mapfile -t ranges < <(node -e '
+    const lock = require(process.argv[1]);
+    const packageName = process.argv[2];
+    const versions = Object.entries(lock.packages)
+      .filter(([path]) => path === `node_modules/${packageName}` || path.endsWith(`/node_modules/${packageName}`))
+      .map(([, metadata]) => metadata.version);
+    process.stdout.write([...new Set(versions)].sort().join("\n"));
+  ' "$BUILD_ROOT/package-lock.json" "$package_name")
   if (( ${#ranges[@]} != 1 )); then
-    echo "expected one declared $package_name range, found: ${ranges[*]}" >&2
+    echo "expected one locked $package_name version, found: ${ranges[*]}" >&2
     return 1
   fi
   printf '%s\n' "${ranges[0]}"
 }
 
-ESBUILD_RANGE="$(find_dependency_range esbuild)"
-SHARP_RANGE="$(find_dependency_range sharp)"
+npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional --os=android --cpu=arm64
+ESBUILD_VERSION="$(npm view @esbuild/android-arm64 version)"
+SHARP_VERSION="$(find_lock_version sharp)"
+npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts "node-gyp@12.4.0"
 npm install --prefix "$BUILD_ROOT" --ignore-scripts --no-save --force --os=android --cpu=arm64 \
-  "esbuild@$ESBUILD_RANGE" \
-  "sharp@$SHARP_RANGE" \
-  "@esbuild/android-arm64@$ESBUILD_RANGE" \
-  "@img/sharp-wasm32@$SHARP_RANGE"
-ESBUILD_VERSION="$(node -p "require('$BUILD_ROOT/node_modules/esbuild/package.json').version")"
-SHARP_VERSION="$(node -p "require('$BUILD_ROOT/node_modules/sharp/package.json').version")"
+  "esbuild@$ESBUILD_VERSION" \
+  "sharp@$SHARP_VERSION" \
+  "@esbuild/android-arm64@$ESBUILD_VERSION" \
+  "@img/sharp-wasm32@$SHARP_VERSION"
 node - <<NODE
 const esbuildPlatform = require("$BUILD_ROOT/node_modules/@esbuild/android-arm64/package.json");
 const sharpPlatform = require("$BUILD_ROOT/node_modules/@img/sharp-wasm32/package.json");
