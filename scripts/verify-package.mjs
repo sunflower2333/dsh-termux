@@ -24,9 +24,13 @@ for (const relativePath of required) {
   await access(join(root, relativePath));
 }
 
-const profileBoot = (await import("node:fs/promises")).readdir(join(root, "lib"));
-const profileFiles = (await profileBoot).filter((name) => /^profile-boot-.*\.js$/.test(name));
-if (profileFiles.length !== 1) throw new Error(`expected one profile-boot chunk, found ${profileFiles.length}`);
+const profileFiles = [];
+for (const name of await (await import("node:fs/promises")).readdir(join(root, "lib"))) {
+  if (!/^profile-boot-.*\.js$/.test(name)) continue;
+  const source = await readFile(join(root, "lib", name), "utf8");
+  if (source.includes("watchUserPatches(ctx")) profileFiles.push(name);
+}
+if (profileFiles.length !== 1) throw new Error(`expected one profile-boot implementation, found ${profileFiles.length}`);
 
 const checks = [
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "defined(__ANDROID__)"],

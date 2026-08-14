@@ -26,29 +26,17 @@ await replaceOnce(
   "koffi: use fstatat fallback on Android",
 );
 
-const profileBootCandidates = [
-  "lib/profile-boot-DG5t9aNs.js",
-  "lib/profile-boot-BnJoK_kl.js",
-];
-let profileBoot;
-for (const candidate of profileBootCandidates) {
-  try {
-    await readFile(join(root, candidate));
-    profileBoot = candidate;
-    break;
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw error;
-  }
+const { readdir } = await import("node:fs/promises");
+const profileBootMatches = [];
+for (const name of await readdir(join(root, "lib"))) {
+  if (!/^profile-boot-.*\.js$/.test(name)) continue;
+  const source = await readFile(join(root, "lib", name), "utf8");
+  if (source.includes("watchUserPatches(ctx")) profileBootMatches.push(join("lib", name));
 }
-if (!profileBoot) {
-  const { readdir } = await import("node:fs/promises");
-  const files = await readdir(join(root, "lib"));
-  const matches = files.filter((name) => /^profile-boot-.*\.js$/.test(name));
-  if (matches.length !== 1) {
-    throw new Error(`dsh HMR patch: expected one profile-boot chunk, found ${matches.length}`);
-  }
-  profileBoot = join("lib", matches[0]);
+if (profileBootMatches.length !== 1) {
+  throw new Error(`dsh HMR patch: expected one implementation chunk, found ${profileBootMatches.length}`);
 }
+const [profileBoot] = profileBootMatches;
 
 await replaceOnce(
   profileBoot,
