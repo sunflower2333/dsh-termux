@@ -1,0 +1,27 @@
+# dsh-termux
+
+[dsh（DeepSeek Harness CLI）](https://github.com/deepseek-ai/deepseek-harness) 的自包含离线安装包。
+
+**特点**：tarball 内含完整依赖树和预编译原生模块（node-pty / koffi / esbuild / sharp），安装**零构建、零联网**，不需要编译工具链。
+
+## 安装（Termux）
+
+```bash
+npm i -g https://github.com/sunflower2333/dsh-termux/releases/latest/download/dsh-termux-0.1.0-rc.6-termux.3.tgz
+dsh --version   # → 0.1.0-rc.6-termux.3
+dsh web         # 启动 Web UI
+```
+
+卸载：`npm uninstall -g dsh-termux`
+
+## 要求
+
+- Termux（**Android arm64**）
+- **Node 24**（`pkg install nodejs`；原生模块按 Node v24.18.0 编译）
+
+## 重新打包
+
+```bash
+./pack-dsh-termux.sh            # 从全局安装的 @deepseek-ai/dsh 重新打包（含本地修改）
+./ssh-test-target.sh <tgz>      # 远程测试机全量验证
+```
