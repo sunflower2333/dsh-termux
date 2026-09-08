@@ -31,6 +31,10 @@ const koffiVariants = [
     "#if defined(__linux__) && defined(STATX_TYPE) && !defined(CORE_NO_STATX)\n    const char *pathname = filename;",
     "#if defined(__linux__) && !defined(__ANDROID__) && defined(STATX_TYPE) && !defined(CORE_NO_STATX)\n    const char *pathname = filename;",
   ],
+  [
+    "#if defined(__linux__) && defined(STATX_TYPE)\n    {\n        const char *pathname = filename;",
+    "#if defined(__linux__) && !defined(__ANDROID__) && defined(STATX_TYPE)\n    {\n        const char *pathname = filename;",
+  ],
 ];
 const koffiMatches = koffiVariants.filter(([before]) => koffiSource.split(before).length - 1 === 1);
 if (koffiMatches.length !== 1) {
