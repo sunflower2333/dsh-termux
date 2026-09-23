@@ -143,15 +143,28 @@ await replaceOnce(
   "dsh: skip patch-file HMR without --expose-internals",
 );
 
-await replaceOnce(
-  "node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
-  "import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from \"node:fs/promises\";",
-  "import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, truncate } from \"node:fs/promises\";",
-  "session persistence: import rename",
-);
+const sessionPersistencePath = "node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js";
+const sessionPersistenceFilename = join(root, sessionPersistencePath);
+const sessionPersistenceSource = await readFile(sessionPersistenceFilename, "utf8");
+const sessionImportVariants = [
+  [
+    "import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from \"node:fs/promises\";",
+    "import { link, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, truncate } from \"node:fs/promises\";",
+  ],
+  [
+    "import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from \"node:fs/promises\";",
+    "import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, stat, truncate } from \"node:fs/promises\";",
+  ],
+];
+const sessionImportMatches = sessionImportVariants.filter(([before]) => sessionPersistenceSource.split(before).length - 1 === 1);
+if (sessionImportMatches.length !== 1) {
+  throw new Error(`session persistence: expected exactly one known import in ${sessionPersistencePath}, found ${sessionImportMatches.length}`);
+}
+await writeFile(sessionPersistenceFilename, sessionPersistenceSource.replace(...sessionImportMatches[0]));
+console.log("patched: session persistence: import rename");
 
 await replaceOnce(
-  "node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+  sessionPersistencePath,
   "\t\t\tawait link(tmp, finalPath);",
   "\t\t\tif (process.platform === \"android\") await rename(tmp, finalPath);\n\t\t\telse await link(tmp, finalPath);",
   "session persistence: publish with rename on Android",
