@@ -61,7 +61,8 @@ if (sharpPlatform.version !== "$SHARP_VERSION") throw new Error("sharp WASM pack
 NODE
 
 cp -a "$BUILD_ROOT/node_modules/@deepseek-ai/dsh/." "$PACKAGE_DIR/"
-cp -a "$BUILD_ROOT/node_modules" "$PACKAGE_DIR/node_modules"
+mkdir -p "$PACKAGE_DIR/node_modules"
+cp -a "$BUILD_ROOT/node_modules/." "$PACKAGE_DIR/node_modules/"
 rm -rf "$PACKAGE_DIR/node_modules/@deepseek-ai/dsh"
 
 node scripts/patch-dsh.mjs "$PACKAGE_DIR"
