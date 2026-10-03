@@ -15,7 +15,7 @@ The release package is generated from the published `@deepseek-ai/dsh` npm packa
 6. **esbuild Android binary**
    `@esbuild/android-arm64` is included explicitly because optional dependency resolution on a Linux Actions host would otherwise select the host binary.
 7. **HMR startup guard**
-   Cordis HMR requires Node's `--expose-internals`, which cannot be passed through `NODE_OPTIONS`. The launcher only creates the optional patch-file HMR watcher when Node was explicitly started with this flag.
+   Older upstream launchers include a Cordis HMR path that requires Node's `--expose-internals`, which cannot be passed through `NODE_OPTIONS`. The patch guards that optional watcher when it is present; newer upstream launchers that no longer ship the patch-file watcher are accepted without this compatibility patch.
 8. **session publication without hard links**
    Android application sandboxes reject `link(2)` with `EACCES`. Initial JSONL session publication uses same-directory `rename(2)` on Android and retains hard-link publication on other POSIX platforms.
 

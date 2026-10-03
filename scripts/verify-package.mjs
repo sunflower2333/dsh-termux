@@ -27,21 +27,24 @@ for (const relativePath of required) {
 const profileFiles = [];
 for (const name of await (await import("node:fs/promises")).readdir(join(root, "lib"))) {
   if (!/^profile-boot-.*\.js$/.test(name)) continue;
-  const source = await readFile(join(root, "lib", name), "utf8");
-  if (source.includes("watchUserPatches(ctx")) profileFiles.push(name);
+  profileFiles.push(name);
 }
 if (profileFiles.length !== 1) throw new Error(`expected one profile-boot implementation, found ${profileFiles.length}`);
+
+const profileSource = await readFile(join(root, "lib", profileFiles[0]), "utf8");
 
 const checks = [
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "defined(__ANDROID__)"],
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "__ANDROID_API__ < 28"],
   [join("node_modules", "koffi", "src", "koffi", "CMakeLists.txt"), "--unresolved-symbols=ignore-all"],
-  [join("lib", profileFiles[0]), "process.execArgv.includes(\"--expose-internals\")"],
   [join("node_modules", "@deepseek-ai", "dsh-session-persistence-jsonl", "lib", "index.js"), "process.platform === \"android\""],
 ];
 for (const [relativePath, needle] of checks) {
   const source = await readFile(join(root, relativePath), "utf8");
   if (!source.includes(needle)) throw new Error(`missing patch marker in ${relativePath}`);
+}
+if (profileSource.includes("watchUserPatches(ctx") && !profileSource.includes("process.execArgv.includes(\"--expose-internals\")")) {
+  throw new Error(`missing HMR startup guard in lib/${profileFiles[0]}`);
 }
 
 console.log(`verified ${manifest.name}@${manifest.version}`);

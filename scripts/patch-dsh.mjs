@@ -97,14 +97,14 @@ for (const name of await readdir(join(root, "lib"))) {
   const source = await readFile(join(root, "lib", name), "utf8");
   if (source.includes("watchUserPatches(ctx")) profileBootMatches.push(join("lib", name));
 }
-if (profileBootMatches.length !== 1) {
+if (profileBootMatches.length > 1) {
   throw new Error(`dsh HMR patch: expected one implementation chunk, found ${profileBootMatches.length}`);
 }
-const [profileBoot] = profileBootMatches;
-
-await replaceOnce(
-  profileBoot,
-  `\t\tif (ctx.get("hmr") === void 0) {
+if (profileBootMatches.length === 1) {
+  const [profileBoot] = profileBootMatches;
+  await replaceOnce(
+    profileBoot,
+    `\t\tif (ctx.get("hmr") === void 0) {
 \t\t\tif (ctx.get("timer") === void 0) await ctx.loader.create({ name: "@deepseek-ai/cordis-plugin-timer" });
 \t\t\tawait ctx.loader.create({
 \t\t\t\tname: "@deepseek-ai/cordis-plugin-hmr",
@@ -121,7 +121,7 @@ await replaceOnce(
 			filename: homePatchPath(),
 			compose: composeLive
 		});`,
-  `\t\tif (ctx.get("hmr") === void 0 && process.execArgv.includes("--expose-internals")) {
+    `\t\tif (ctx.get("hmr") === void 0 && process.execArgv.includes("--expose-internals")) {
 \t\t\tif (ctx.get("timer") === void 0) await ctx.loader.create({ name: "@deepseek-ai/cordis-plugin-timer" });
 \t\t\tawait ctx.loader.create({
 \t\t\t\tname: "@deepseek-ai/cordis-plugin-hmr",
@@ -140,8 +140,11 @@ await replaceOnce(
 				compose: composeLive
 			});
 		}`,
-  "dsh: skip patch-file HMR without --expose-internals",
-);
+    "dsh: skip patch-file HMR without --expose-internals",
+  );
+} else {
+  console.log("skipped: dsh HMR patch: upstream launcher has no patch-file watcher");
+}
 
 const sessionPersistencePath = "node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js";
 const sessionPersistenceFilename = join(root, sessionPersistencePath);
