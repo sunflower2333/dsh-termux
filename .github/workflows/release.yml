@@ -1,6 +1,13 @@
 name: Build Termux release
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release.yml
+      - scripts/**
+      - PATCHES.md
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
@@ -102,6 +109,7 @@ jobs:
 
   release:
     needs: [check, build]
+    if: github.event_name != 'push' && needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
