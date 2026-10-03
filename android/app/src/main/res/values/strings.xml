@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">DSH</string>
+    <string name="start">启动</string>
+    <string name="stop">停止</string>
+    <string name="channel_name">DSH 后台服务</string>
+    <string name="channel_description">保持本机 DSH 服务运行</string>
+    <string name="idle_status">点击启动，在应用内使用 DSH。</string>
+    <string name="starting_status">正在启动 DSH…</string>
+    <string name="running_status">DSH 正在本机运行</string>
+    <string name="stopping_status">正在停止 DSH…</string>
+    <string name="error_status">错误：%1$s</string>
+</resources>
