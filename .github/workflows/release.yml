@@ -87,10 +87,13 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
       - name: Build offline Termux package
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
           UPSTREAM_VERSION: ${{ needs.check.outputs.upstream }}
           TERMUX_REVISION: ${{ needs.check.outputs.revision }}
-        run: bash scripts/build-termux.sh
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?setup-android did not provide ANDROID_HOME}"
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865" \
+            bash scripts/build-termux.sh
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-termux-${{ needs.check.outputs.termux }}
