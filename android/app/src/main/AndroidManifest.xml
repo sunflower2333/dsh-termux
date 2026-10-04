@@ -26,7 +26,7 @@
             android:stopWithTask="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-started local DSH coding assistant server, kept available while switching apps or running a user task." />
+                android:value="User-started local DeepSeek Harness coding assistant server, kept available while switching apps or running a user task." />
         </service>
     </application>
 </manifest>

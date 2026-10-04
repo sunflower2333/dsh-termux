@@ -30,7 +30,7 @@ pkg install python nodejs-lts
 
 ## 原生 Android 版本（POC）
 
-`android/` 提供一个原生 WebView 外壳和前台服务：启动 DSH 后可以切换到其他应用，服务通过通知保持本机 Web UI 运行，不需要再单独打开浏览器。它只接受 `127.0.0.1` 的服务地址，并且只支持 ARM64；完整的 Node/DSH 运行时需要按 [android/README.md](android/README.md) 先构建并暂存，构建脚本会拒绝缺少真实运行时的 APK。
+`android/` 提供一个原生 DeepSeek Harness Android 客户端和前台服务：启动 DSH 后可以切换到其他应用，服务通过通知保持本机 Web UI 运行，不需要再单独打开浏览器。它只接受 `127.0.0.1` 的服务地址，并且只支持 ARM64；完整的 Node/DSH 运行时需要按 [android/README.md](android/README.md) 先构建并暂存，构建脚本会拒绝缺少真实运行时的 APK。
 
 ## 重新打包
 

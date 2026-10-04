@@ -1,7 +1,7 @@
-# DSH Android POC
+# DeepSeek Harness Android POC
 
-This is a small Android shell for the existing DSH web UI. `MainActivity` hosts
-the UI in a loopback-only `WebView`; `DshService` starts DSH in an Android
+This is a small native Android client for the existing DeepSeek Harness web UI.
+`MainActivity` hosts the UI in a loopback-only `WebView`; `DshService` starts DSH in an Android
 foreground service and keeps a resident notification while the app is in the
 background. The service does not expose a LAN listener and does not enable
 Full Access or change DSH's approval policy.
