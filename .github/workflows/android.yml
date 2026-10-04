@@ -1,0 +1,128 @@
+name: Build DSH Android
+
+on:
+  push:
+    branches:
+      - android
+  workflow_dispatch:
+    inputs:
+      upstream_version:
+        description: "@deepseek-ai/dsh version (blank = latest)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      NODE_VERSION: 24.18.0
+      ANDROID_API: 24
+      ANDROID_ABI: arm64-v8a
+      ANDROID_NDK_VERSION: 29.0.14206865
+      UPSTREAM_VERSION: ${{ inputs.upstream_version }}
+    steps:
+      - name: Check out Android branch
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake ninja-build
+
+      - name: Build the real DSH Termux package
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-termux.sh
+
+      - name: Build the arm64 Node Android runtime
+        shell: bash
+        env:
+          JOBS: 4
+        run: |
+          set -euo pipefail
+          bash scripts/build-android-node.sh
+
+      - name: Stage the Android runtime bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/stage-android-runtime.sh
+
+      - name: Assemble release APK
+        working-directory: android
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      # There is no repository signing key. Sign this CI artifact with an
+      # ephemeral key so the uploaded APK can be installed for testing.
+      - name: Sign and verify release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          unsigned="android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          aligned="$RUNNER_TEMP/dsh-android-aligned.apk"
+          signed="android/app/build/outputs/apk/release/dsh-android-release.apk"
+          keystore="$RUNNER_TEMP/dsh-android-ci.keystore"
+          [[ -f "$unsigned" ]] || { echo "missing release APK: $unsigned" >&2; exit 1; }
+
+          keytool -genkeypair -v \
+            -keystore "$keystore" \
+            -storepass android \
+            -keypass android \
+            -alias dsh-ci \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 1 \
+            -dname "CN=DSH Android CI, O=DeepSeek Harness"
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 "$unsigned" "$aligned"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks "$keystore" \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out "$signed" "$aligned"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$signed"
+          sha256sum "$signed" > "$signed.sha256"
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-android-${{ github.run_number }}
+          path: |
+            android/app/build/outputs/apk/release/dsh-android-release.apk
+            android/app/build/outputs/apk/release/dsh-android-release.apk.sha256
+          if-no-files-found: error
