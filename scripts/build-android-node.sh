@@ -8,6 +8,8 @@
 # Android only extracts native libraries into that executable directory.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 NODE_VERSION="${NODE_VERSION:-24.18.0}"
 ANDROID_API="${ANDROID_API:-24}"
 ANDROID_ABI="${ANDROID_ABI:-arm64-v8a}"
@@ -85,9 +87,39 @@ fi
 # Python helper mutates only its child process environment.  Export the same
 # target settings here so the configure and make processes receive them.
 pushd "$NODE_SOURCE_DIR" >/dev/null
-if ! grep -q '^#define V8_TRAP_HANDLER_SUPPORTED false$' deps/v8/src/trap-handler/trap-handler.h; then
-  ./android-configure patch
-fi
+
+# Node's Android configure script selects V8 trap-handler sources using GYP's
+# target OS for both toolsets. Extend the host conditions so Linux arm64
+# simulator support is linked into mksnapshot; the Android target remains
+# trap-handler disabled.
+python3 - "tools/v8_gypfiles/v8.gyp" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+replacements = {
+    'OS in "linux mac ios freebsd openharmony"':
+        'OS in "linux mac ios freebsd openharmony" or (_toolset=="host" and host_os=="linux")',
+    '((_toolset=="host" and host_arch=="arm64" or _toolset=="target" and target_arch=="arm64") and (OS in "linux mac ios openharmony")) or ((_toolset=="host" and host_arch=="x64" or _toolset=="target" and target_arch=="x64") and (OS in "linux mac openharmony"))':
+        '((_toolset=="host" and host_arch=="arm64" or _toolset=="target" and target_arch=="arm64") and (OS in "linux mac ios openharmony")) or ((_toolset=="host" and host_arch=="x64" or _toolset=="target" and target_arch=="x64") and (OS in "linux mac openharmony")) or (_toolset=="host" and host_os=="linux")',
+    '(_toolset=="host" and host_arch=="x64" or _toolset=="target" and target_arch=="x64") and (OS in "linux mac win openharmony")':
+        '(_toolset=="host" and host_arch=="x64" or _toolset=="target" and target_arch=="x64") and (OS in "linux mac win openharmony") or (_toolset=="host" and host_os=="linux")',
+}
+for old, new in replacements.items():
+    if new in source:
+        continue
+    if old in source:
+        source = source.replace(old, new)
+    else:
+        raise SystemExit(f"V8 GYP trap-handler condition not found: {old[:70]}")
+path.write_text(source)
+PY
+
+# The NDK no longer ships the old cpufeatures archive as a linkable library,
+# while Node's bundled zlib still calls android_getCpuFeatures(). Android
+# exposes the same ARM64 capability bits through getauxval instead.
+python3 "$SCRIPT_DIR/patch-android-zlib.py" "$NODE_SOURCE_DIR/deps/zlib/cpu_features.c"
 export PATH="$TOOLCHAIN:$PATH"
 export CC="$TOOLCHAIN/${TOOLCHAIN_PREFIX}${ANDROID_API}-clang"
 export CXX="$TOOLCHAIN/${TOOLCHAIN_PREFIX}${ANDROID_API}-clang++"
@@ -98,6 +130,8 @@ export CXX="$TOOLCHAIN/${TOOLCHAIN_PREFIX}${ANDROID_API}-clang++"
 export CC_host="${CC_host:-cc}"
 export CXX_host="${CXX_host:-c++}"
 export LINK_host="${LINK_host:-$CXX_host}"
+# Keep the GYP target OS as Android; the host_os conditions above add the
+# Linux-only simulator sources needed by host-side mksnapshot.
 export GYP_DEFINES="target_arch=$NODE_ARCH v8_target_arch=$NODE_ARCH android_target_arch=$NODE_ARCH host_os=linux OS=android android_ndk_path=$ANDROID_NDK_HOME"
 ./configure \
   --dest-cpu="$NODE_ARCH" \
@@ -108,7 +142,7 @@ export GYP_DEFINES="target_arch=$NODE_ARCH v8_target_arch=$NODE_ARCH android_tar
   --without-corepack \
   --without-inspector
 
-make -j"$JOBS" BUILDTYPE=Release
+make -C out -j"$JOBS" node BUILDTYPE=Release
 popd >/dev/null
 
 node_bin="$NODE_SOURCE_DIR/out/Release/node"
