@@ -28,7 +28,7 @@ pkg install python nodejs-lts
 - **不支持容器 / 沙箱隔离模式**：Termux（Android）上没有可用的沙箱后端（bubblewrap / Landlock 等），dsh 的容器化命令隔离无法启用。
 - **运行命令需要授权**：无沙箱环境下，命令执行依赖**手动审批**（Manual Approval）或 **Full Access**（完整访问权限）配置才能正常运行，否则命令会被拒绝执行。
 
-## 原生 Android 版本（POC）
+## 原生 Android 版本
 
 `android/` 提供一个原生 DeepSeek Harness Android 客户端和前台服务：启动 DSH 后可以切换到其他应用，服务通过通知保持本机 Web UI 运行，不需要再单独打开浏览器。它只接受 `127.0.0.1` 的服务地址，并且只支持 ARM64；完整的 Node/DSH 运行时需要按 [android/README.md](android/README.md) 先构建并暂存，构建脚本会拒绝缺少真实运行时的 APK。
 

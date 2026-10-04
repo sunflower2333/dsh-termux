@@ -1,4 +1,4 @@
-# DeepSeek Harness Android POC
+# DeepSeek Harness Android
 
 This is a small native Android client for the existing DeepSeek Harness web UI.
 `MainActivity` hosts the UI in a loopback-only `WebView`; `DshService` starts DSH in an Android
