@@ -91,6 +91,56 @@ await replaceOnce(
 );
 
 const { readdir } = await import("node:fs/promises");
+
+// Node reports the Android target as `android`, while the subprocess package
+// uses Linux's /proc and process-group APIs for its POSIX inspector. Android
+// also has no /bin/sh symlink in the app sandbox; use the system shell path
+// for the fallback and default terminal shell.
+const subprocessLocalLib = join(root, "node_modules/@deepseek-ai/dsh-subprocess-local/lib");
+const subprocessLaunchName = (await readdir(subprocessLocalLib)).find((name) => /^runner-launch-.*\.js$/.test(name));
+if (!subprocessLaunchName) throw new Error("dsh Android patch: subprocess runner launch chunk is missing");
+await replaceOnce(
+  join("node_modules/@deepseek-ai/dsh-subprocess-local/lib", subprocessLaunchName),
+  "if (platform === \"linux\") return new LinuxProcessInspector(arch, internals);",
+  "if (platform === \"linux\" || platform === \"android\") return new LinuxProcessInspector(arch, internals);",
+  "dsh Android: use Linux process inspector",
+);
+
+await replaceOnce(
+  "node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js",
+  "\t\tconst defaultShell = platform === \"windows\" ? process.env.ComSpec || void 0 : process.env.SHELL || userInfo().shell || void 0;",
+  "\t\tconst defaultShell = platform === \"windows\" ? process.env.ComSpec || void 0 : process.env.SHELL || userInfo().shell || (process.platform === \"android\" ? \"/system/bin/sh\" : void 0);",
+  "dsh Android: select system shell",
+);
+
+await replaceOnce(
+  "node_modules/@deepseek-ai/dsh-api-terminal-controller/lib/index.js",
+  "\t\tshell = profile(environment.defaultShell ?? (environment.platform === \"windows\" ? \"cmd.exe\" : \"/bin/sh\"));",
+  "\t\tshell = profile(environment.defaultShell ?? (environment.platform === \"windows\" ? \"cmd.exe\" : environment.platform === \"posix\" && process.platform === \"android\" ? \"/system/bin/sh\" : \"/bin/sh\"));",
+  "dsh Android: terminal controller shell fallback",
+);
+
+await replaceOnce(
+  "node_modules/@deepseek-ai/dsh-api-terminal-controller/lib/types/shells.js",
+  "        shell = profile(environment.defaultShell ?? (environment.platform === 'windows' ? 'cmd.exe' : '/bin/sh'));",
+  "        shell = profile(environment.defaultShell ?? (environment.platform === 'windows' ? 'cmd.exe' : environment.platform === 'posix' && process.platform === 'android' ? '/system/bin/sh' : '/bin/sh'));",
+  "dsh Android: terminal shell type fallback",
+);
+
+const runnerPath = "node_modules/@deepseek-ai/dsh-subprocess-local/lib/runner.js";
+const runnerFilename = join(root, runnerPath);
+const runnerSource = await readFile(runnerFilename, "utf8");
+const runnerNeedle = "internals.execve(\"/bin/sh\", [\n\t\t\t\"/bin/sh\",";
+const runnerMatches = runnerSource.split(runnerNeedle).length - 1;
+if (runnerMatches !== 2) throw new Error(`dsh Android: expected two /bin/sh fallbacks in runner.js, found ${runnerMatches}`);
+await writeFile(
+  runnerFilename,
+  runnerSource.replaceAll(
+    runnerNeedle,
+    "internals.execve(process.platform === \"android\" ? \"/system/bin/sh\" : \"/bin/sh\", [\n\t\t\tprocess.platform === \"android\" ? \"/system/bin/sh\" : \"/bin/sh\","),
+);
+console.log("patched: dsh Android: process inspector and shell paths");
+
 const profileBootMatches = [];
 for (const name of await readdir(join(root, "lib"))) {
   if (!/^profile-boot-.*\.js$/.test(name)) continue;

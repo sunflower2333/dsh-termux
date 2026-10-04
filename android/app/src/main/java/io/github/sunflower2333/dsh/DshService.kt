@@ -72,6 +72,7 @@ class DshService : Service() {
                 .redirectErrorStream(true)
             builder.environment()["DSH_ANDROID"] = "1"
             builder.environment()["DSH_WEB_HOST"] = manifest.host
+            builder.environment()["SHELL"] = "/system/bin/sh"
             val home = File(filesDir, "dsh-home").apply { mkdirs() }
             val temp = cacheDir.resolve("dsh-tmp").apply { mkdirs() }
             builder.environment()["HOME"] = home.absolutePath
