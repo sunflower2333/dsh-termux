@@ -8,6 +8,174 @@ if (!root) {
   throw new Error("usage: patch-dsh.mjs <dsh-package-directory>");
 }
 
+/**
+ * The desktop Web surface intentionally starts with a DockKit layout tuned
+ * for a mouse and a wide window.  Android WebView has no window chrome and
+ * commonly runs at 360–600 CSS px. Keep this as a tiny post-build layer so
+ * upstream UI code remains untouched while the packaged Android client gets
+ * safe scrolling, touch targets, and viewport-bounded overlays.
+ */
+const ANDROID_MOBILE_CSS_MARKER = "/* dsh-android-mobile */";
+const ANDROID_MOBILE_CSS = `
+${ANDROID_MOBILE_CSS_MARKER}
+@media screen and (max-width: 600px), screen and (pointer: coarse) and (max-width: 900px) {
+  html, body, #root {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  body {
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
+
+  /* DockKit panes must be allowed to shrink below the desktop tab width. */
+  [data-dockkit-surface], dockkit-surface,
+  [data-dockkit-split], dockkit-split {
+    min-width: 0 !important;
+    min-height: 0 !important;
+  }
+  [data-dockkit-split], dockkit-split {
+    flex-direction: column !important;
+  }
+  [data-dockkit-cell], dockkit-cell {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    flex-basis: 0 !important;
+  }
+  [data-dockkit-divider], dockkit-divider {
+    width: 100% !important;
+    height: 0 !important;
+    touch-action: none;
+  }
+  [data-dockkit-strip], dockkit-strip {
+    box-sizing: border-box;
+    min-width: 0;
+    height: 44px;
+    padding-top: max(8px, env(safe-area-inset-top, 0px));
+    padding-inline: max(8px, env(safe-area-inset-left, 0px));
+    touch-action: pan-x;
+  }
+  [data-dockkit-strip-tabs], dockkit-strip-tabs {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  [data-dockkit-tab], dockkit-tab {
+    min-width: 48px;
+    min-height: 36px;
+    max-width: 68vw;
+    flex: 0 1 auto;
+  }
+  [data-dockkit-strip-chrome], dockkit-strip-chrome {
+    gap: 4px;
+    margin-left: 2px;
+  }
+  [data-dockkit-split-button], dockkit-split-button,
+  [data-dockkit-add-tab], dockkit-add-tab,
+  [data-dockkit-tab-close], dockkit-tab-close {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  [data-dockkit-float], dockkit-float {
+    box-sizing: border-box !important;
+    left: 8px !important;
+    top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100vh - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+  }
+  [data-dockkit-float-resize] {
+    display: none;
+  }
+
+  /* Menus, listboxes and dialogs stay inside the WebView viewport. */
+  [role="menu"], [role="listbox"] {
+    box-sizing: border-box;
+    min-width: 0 !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: min(60vh, 420px);
+    max-height: min(60dvh, 420px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"] {
+    min-height: 44px;
+    box-sizing: border-box;
+    padding-block: 10px;
+  }
+  [role="dialog"][aria-modal="true"], [role="alertdialog"] {
+    box-sizing: border-box;
+    width: min(100%, calc(100vw - 24px)) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    overflow: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  button, input, select, textarea, [role="button"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"] {
+    touch-action: manipulation;
+  }
+  textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    max-height: 38vh;
+    max-height: 38dvh;
+    resize: vertical;
+  }
+  input, select {
+    max-width: 100%;
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  pre, code, [data-terminal], [data-read], [data-search], [data-diff] {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  table {
+    max-width: 100%;
+  }
+  img, video, iframe {
+    max-width: 100%;
+    height: auto;
+  }
+}
+`;
+
+async function patchAndroidFrontend() {
+  const frontendDist = join(root, "node_modules/@deepseek-ai/dsh-web-frontend/dist");
+  const indexPath = join(frontendDist, "index.html");
+  const index = await readFile(indexPath, "utf8");
+  const stylesheetHrefs = [...index.matchAll(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/g)]
+    .map((match) => match[1]);
+  const candidates = stylesheetHrefs.filter((href) => /(?:^|\/)index-[^/]+\.css$/.test(href));
+  if (candidates.length !== 1) {
+    throw new Error(`dsh Android UI patch: expected one frontend index stylesheet, found ${candidates.length}`);
+  }
+  const cssPath = join(frontendDist, candidates[0]);
+  const css = await readFile(cssPath, "utf8");
+  if (css.includes(ANDROID_MOBILE_CSS_MARKER)) {
+    console.log("skipped: dsh Android UI: mobile stylesheet already present");
+    return;
+  }
+  await writeFile(cssPath, `${css}\n${ANDROID_MOBILE_CSS}`);
+  console.log(`patched: dsh Android UI: responsive WebView stylesheet (${candidates[0]})`);
+}
+
+await patchAndroidFrontend();
+
 async function replaceOnce(relativePath, before, after, label) {
   const filename = join(root, relativePath);
   const source = await readFile(filename, "utf8");

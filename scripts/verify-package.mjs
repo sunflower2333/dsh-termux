@@ -15,6 +15,7 @@ if (manifest.name !== "dsh-termux" || manifest.version !== expectedVersion) {
 
 const required = [
   "lib/bin.js",
+  "node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html",
   "node_modules/node-pty/prebuilds/android-arm64/pty.node",
   "node_modules/koffi/build/koffi/android_arm64/koffi.node",
   "node_modules/@esbuild/android-arm64/bin/esbuild",
@@ -50,6 +51,16 @@ const checks = [
 for (const [relativePath, needle] of checks) {
   const source = await readFile(join(root, relativePath), "utf8");
   if (!source.includes(needle)) throw new Error(`missing patch marker in ${relativePath}`);
+}
+const frontendDist = join(root, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist");
+const frontendIndex = await readFile(join(frontendDist, "index.html"), "utf8");
+const frontendStylesheet = [...frontendIndex.matchAll(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/g)]
+  .map((match) => match[1])
+  .find((href) => /(?:^|\/)index-[^/]+\.css$/.test(href));
+if (!frontendStylesheet) throw new Error("frontend index stylesheet is missing");
+const frontendCss = await readFile(join(frontendDist, frontendStylesheet), "utf8");
+for (const marker of ["/* dsh-android-mobile */", "data-dockkit-split", "max-width: calc(100vw - 16px)"]) {
+  if (!frontendCss.includes(marker)) throw new Error(`missing Android UI patch marker ${marker}`);
 }
 if (profileSource.includes("watchUserPatches(ctx") && !profileSource.includes("process.execArgv.includes(\"--expose-internals\")")) {
   throw new Error(`missing HMR startup guard in lib/${profileFiles[0]}`);

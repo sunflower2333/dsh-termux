@@ -20,5 +20,7 @@ The release package is generated from the published `@deepseek-ai/dsh` npm packa
    Android application sandboxes reject `link(2)` with `EACCES`. Initial JSONL session publication uses same-directory `rename(2)` on Android and retains hard-link publication on other POSIX platforms.
 9. **Android subprocess and shell compatibility**
    Android reports `process.platform === "android"` even though its `/proc`, process-group and ARM64 syscall interfaces follow Linux. The subprocess terminal inspector reuses the Linux implementation, and shell defaults/ENOEXEC fallback use `/system/bin/sh` instead of the unavailable `/bin/sh` path.
+10. **Android WebView responsive surface**
+   The published web frontend is desktop-first and its DockKit panes, menus and dialogs can exceed a phone viewport. The package patch appends a guarded mobile stylesheet to the frontend's hashed index CSS: panes collapse vertically, tab strips scroll, controls receive touch-safe dimensions, overlays stay within the viewport, and code/media blocks retain local horizontal scrolling. The patch uses the generated `data-dockkit-*` attributes so it remains independent of minified class names.
 
 Every source replacement is guarded by an exact one-match assertion. An upstream refactor therefore fails the workflow for review instead of silently producing an unpatched release.
