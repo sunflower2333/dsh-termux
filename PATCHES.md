@@ -18,5 +18,7 @@ The release package is generated from the published `@deepseek-ai/dsh` npm packa
    Older upstream launchers include a Cordis HMR path that requires Node's `--expose-internals`, which cannot be passed through `NODE_OPTIONS`. The patch guards that optional watcher when it is present; newer upstream launchers that no longer ship the patch-file watcher are accepted without this compatibility patch.
 8. **session publication without hard links**
    Android application sandboxes reject `link(2)` with `EACCES`. Initial JSONL session publication uses same-directory `rename(2)` on Android and retains hard-link publication on other POSIX platforms.
+9. **Android subprocess and shell compatibility**
+   Android reports `process.platform === "android"` even though its `/proc`, process-group and ARM64 syscall interfaces follow Linux. The subprocess terminal inspector reuses the Linux implementation, and shell defaults/ENOEXEC fallback use `/system/bin/sh` instead of the unavailable `/bin/sh` path.
 
 Every source replacement is guarded by an exact one-match assertion. An upstream refactor therefore fails the workflow for review instead of silently producing an unpatched release.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const [root, expectedVersion] = process.argv.slice(2);
@@ -25,19 +25,27 @@ for (const relativePath of required) {
 }
 
 const profileFiles = [];
-for (const name of await (await import("node:fs/promises")).readdir(join(root, "lib"))) {
+for (const name of await readdir(join(root, "lib"))) {
   if (!/^profile-boot-.*\.js$/.test(name)) continue;
   profileFiles.push(name);
 }
 if (profileFiles.length !== 1) throw new Error(`expected one profile-boot implementation, found ${profileFiles.length}`);
 
 const profileSource = await readFile(join(root, "lib", profileFiles[0]), "utf8");
+const subprocessLib = join(root, "node_modules", "@deepseek-ai", "dsh-subprocess-local", "lib");
+const subprocessLaunch = (await readdir(subprocessLib)).find((name) => /^runner-launch-.*\.js$/.test(name));
+if (!subprocessLaunch) throw new Error("missing subprocess runner launch chunk");
 
 const checks = [
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "defined(__ANDROID__)"],
   [join("node_modules", "koffi", "lib", "native", "base", "base.cc"), "__ANDROID_API__ < 28"],
   [join("node_modules", "koffi", "src", "koffi", "CMakeLists.txt"), "--unresolved-symbols=ignore-all"],
   [join("node_modules", "@deepseek-ai", "dsh-session-persistence-jsonl", "lib", "index.js"), "process.platform === \"android\""],
+  [join("node_modules", "@deepseek-ai", "dsh-subprocess-local", "lib", subprocessLaunch), "platform === \"linux\" || platform === \"android\""],
+  [join("node_modules", "@deepseek-ai", "dsh-subprocess-local", "lib", "index.js"), "/system/bin/sh"],
+  [join("node_modules", "@deepseek-ai", "dsh-subprocess-local", "lib", "runner.js"), "/system/bin/sh"],
+  [join("node_modules", "@deepseek-ai", "dsh-api-terminal-controller", "lib", "index.js"), "/system/bin/sh"],
+  [join("node_modules", "@deepseek-ai", "dsh-api-terminal-controller", "lib", "types", "shells.js"), "/system/bin/sh"],
 ];
 for (const [relativePath, needle] of checks) {
   const source = await readFile(join(root, relativePath), "utf8");
