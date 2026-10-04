@@ -31,12 +31,12 @@ class DshService : Service() {
             stopping = true
             currentUrl = null
             stopSelf()
-            return START_NOT_STICKY
+            return START_STICKY
         }
         if (process == null && !launchScheduled.get()) stopping = false
         currentUrl?.let {
             broadcast(ACTION_READY, it)
-            return START_NOT_STICKY
+            return START_STICKY
         }
         if (process == null && launchScheduled.compareAndSet(false, true)) executor.execute {
             try {
@@ -45,7 +45,7 @@ class DshService : Service() {
                 launchScheduled.set(false)
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun launchDsh() {
@@ -154,6 +154,12 @@ class DshService : Service() {
         const val EXTRA_VALUE = "value"
         private const val CHANNEL_ID = "dsh-service"
         private const val NOTIFICATION_ID = 1001
-        private val URL_PATTERN = Regex("http://127\\.0\\.0\\.1:[0-9]{1,5}(?:/[^\\s]*)?")
+        // dsh web prints the browser launch URL with its one-time auth token
+        // in the query string (for example: http://127.0.0.1:43127/?token=…).
+        // Keep that query intact: loading the clean URL makes the web server
+        // return 401 and leaves the WebView looking blank.
+        private val URL_PATTERN = Regex("http://127\\.0\\.0\\.1:[0-9]{1,5}(?:(?:/|\\?)[^\\s\\u001b]*)?")
+
+        internal fun extractReadyUrl(line: String): String? = URL_PATTERN.find(line)?.value
     }
 }

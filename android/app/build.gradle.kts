@@ -9,7 +9,9 @@ android {
 
     defaultConfig {
         applicationId = "io.github.sunflower2333.dsh"
-        minSdk = 28
+        // DSH's Android target is Android 11 and newer. The bundled Node
+        // runtime and WebView integration are tested against API 30+.
+        minSdk = 30
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-poc"

@@ -4,9 +4,12 @@
     <string name="stop">停止</string>
     <string name="channel_name">DeepSeek Harness 后台服务</string>
     <string name="channel_description">保持本机 DeepSeek Harness 服务运行</string>
-    <string name="idle_status">点击启动，在应用内使用 DeepSeek Harness。</string>
+    <string name="idle_status">正在准备 DeepSeek Harness…</string>
     <string name="starting_status">正在启动 DeepSeek Harness…</string>
     <string name="running_status">DeepSeek Harness 正在本机运行</string>
     <string name="stopping_status">正在停止 DeepSeek Harness…</string>
     <string name="error_status">错误：%1$s</string>
+    <string name="exited_status">DeepSeek Harness 进程已退出</string>
+    <string name="web_load_error">DSH 页面加载失败</string>
+    <string name="retry">重试</string>
 </resources>

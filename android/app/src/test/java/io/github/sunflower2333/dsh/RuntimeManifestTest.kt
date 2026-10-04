@@ -11,10 +11,16 @@ import org.junit.Test
 class RuntimeManifestTest {
     @Test fun acceptsOnlyLoopbackHttpUrls() {
         assertTrue(LocalUrl.isAllowed("http://127.0.0.1:4312/"))
+        assertTrue(LocalUrl.isAllowed("http://127.0.0.1:4312/?token=one-time-token"))
         assertTrue(LocalUrl.isAllowed("http://127.0.0.1:4312/ui/index.html", "/ui"))
         assertFalse(LocalUrl.isAllowed("https://127.0.0.1:4312/"))
         assertFalse(LocalUrl.isAllowed("http://localhost:4312/"))
         assertFalse(LocalUrl.isAllowed("http://127.0.0.1:4312@evil.test/"))
+    }
+
+    @Test fun keepsTheDshBrowserTokenInTheReadyUrl() {
+        val line = "dsh web: http://127.0.0.1:4312/?token=one-time-token"
+        assertTrue(DshService.extractReadyUrl(line)!!.contains("?token=one-time-token"))
     }
 
     @Test fun rejectsZipTraversal() {
