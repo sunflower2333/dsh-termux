@@ -10,7 +10,7 @@ android {
     defaultConfig {
         applicationId = "io.github.sunflower2333.dsh"
         // DSH's Android target is Android 11 and newer. The bundled Node
-        // runtime and WebView integration are tested against API 30+.
+        // runtime is verified on Bionic API 30+.
         minSdk = 30
         targetSdk = 35
         versionCode = 1
@@ -31,7 +31,7 @@ android {
     packaging {
         jniLibs.useLegacyPackaging = true
     }
-androidResources { noCompress += "zip" }
+    androidResources { noCompress += "zip" }
 }
 
 // Runtime assets are produced by the Android runtime packaging step.  Never
@@ -41,6 +41,10 @@ tasks.register("verifyRuntimeAssets") {
     val runtimeZip = file("src/main/assets/runtime/runtime.zip")
     val node = file("src/main/jniLibs/arm64-v8a/libdsh_node.so")
     val cxx = file("src/main/jniLibs/arm64-v8a/libc++_shared.so")
+    val esbuild = file("src/main/jniLibs/arm64-v8a/libdsh_esbuild.so")
+    val bash = file("src/main/jniLibs/arm64-v8a/libdsh_bash.so")
+    val nativeNotices = listOf("node-LICENSE.txt", "libcxx-NOTICE.txt")
+        .map { file("src/main/assets/licenses/native/$it") }
     doLast {
         check(manifest.isFile) {
             "Missing ${manifest.relativeTo(projectDir)}; generate the real DSH runtime first"
@@ -53,6 +57,17 @@ tasks.register("verifyRuntimeAssets") {
         }
         check(cxx.isFile && cxx.canRead()) {
             "Missing ${cxx.relativeTo(projectDir)}; copy the NDK libc++_shared.so first"
+        }
+        check(esbuild.isFile && esbuild.canRead()) {
+            "Missing ${esbuild.relativeTo(projectDir)}; stage the Android esbuild runtime first"
+        }
+        check(bash.isFile && bash.canRead()) {
+            "Missing ${bash.relativeTo(projectDir)}; build the Android Bash runtime first"
+        }
+        nativeNotices.forEach { notice ->
+            check(notice.isFile && notice.length() > 0) {
+                "Missing ${notice.relativeTo(projectDir)}; stage the native runtime license notices first"
+            }
         }
     }
 }

@@ -1,16 +1,26 @@
 <resources>
+    <string name="web_boot_timeout">DSH 页面未能完成启动。\n%1$s</string>
     <string name="app_name">DeepSeek Harness</string>
-    <string name="start">启动</string>
     <string name="stop">停止</string>
     <string name="channel_name">DeepSeek Harness 后台服务</string>
     <string name="channel_description">保持本机 DeepSeek Harness 服务运行</string>
-    <string name="idle_status">正在准备 DeepSeek Harness…</string>
     <string name="starting_status">正在启动 DeepSeek Harness…</string>
     <string name="running_status">DeepSeek Harness 正在本机运行</string>
-    <string name="stopping_status">正在停止 DeepSeek Harness…</string>
-    <string name="error_status">错误：%1$s</string>
     <string name="exited_status">DeepSeek Harness 进程已退出</string>
+    <string name="process_exit_error">DeepSeek Harness 进程已退出，退出码：%1$d</string>
+    <string name="startup_failure_details">%1$s\n\n进程输出（末尾）：\n%2$s</string>
+    <string name="no_process_output">进程未输出任何日志。启动日志保存在应用缓存中。</string>
     <string name="web_load_error">DSH 页面加载失败</string>
+    <string name="web_http_error">DSH 页面加载失败，HTTP 状态码：%1$d</string>
     <string name="external_browser_unavailable">没有可用的浏览器打开此链接</string>
-    <string name="retry">重试</string>
+    <string name="file_picker_unavailable">没有可用的系统文件选择器</string>
+    <string name="file_operation_interrupted">页面重建中断了未完成的文件操作，请检查下载结果或重新选择文件。</string>
+    <string name="download_saved">已保存：%1$s</string>
+    <string name="download_failed">文件保存失败</string>
+    <string name="download_busy">正在保存另一份文件</string>
+    <string name="download_local_only">只能保存当前 DSH 服务提供的文件</string>
+    <string name="copy_error">复制错误详情</string>
+    <string name="error_copied">错误详情已复制</string>
+    <string name="error_details">错误详情</string>
+    <string name="error_summary">%1$s\n点击查看并复制错误详情</string>
 </resources>

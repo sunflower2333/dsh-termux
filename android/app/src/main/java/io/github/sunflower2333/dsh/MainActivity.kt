@@ -3,38 +3,58 @@ package io.github.sunflower2333.dsh
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
+import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.graphics.Color
-import android.view.Gravity
-import android.widget.Button
 import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.File
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
-    private lateinit var loading: LinearLayout
-    private lateinit var status: TextView
-    private lateinit var retry: Button
+    private lateinit var errorBar: TextView
+    private val handler = Handler(Looper.getMainLooper())
     private var terminalError = false
-    private var restoredWebState = false
+    private var lastErrorMessage: String? = null
+    @Volatile private var lastReadyLaunchUrl: String? = null
+    private var pendingFileSelection: ValueCallback<Array<Uri>>? = null
+    private var pendingDownload: AndroidDownloadRequest? = null
+    private var pendingDownloadDestination: Uri? = null
+    private var readyHostConfirmed = false
+    private var downloadPageReady = false
+    private val downloads by lazy { AndroidDownloads(this) }
+    private var uiCheckGeneration = 0
+    private val webDiagnostics by lazy { StartupDiagnostics(File(cacheDir, "dsh-webview.log")) }
     // Keep the callback behind an Any-typed slot: OnBackInvokedCallback was
     // introduced in API 33 while this client still supports API 30.
     private var backInvokedCallback: Any? = null
@@ -43,17 +63,27 @@ class MainActivity : Activity() {
             val value = intent?.getStringExtra(DshService.EXTRA_VALUE).orEmpty()
             when (intent?.action) {
                 DshService.ACTION_READY -> {
+                    if (!LocalUrl.isAllowed(value)) return
+                    val reload = terminalError || lastReadyLaunchUrl != value ||
+                        !WebNavigation.isCurrentOrigin(webView.url, value)
                     terminalError = false
-                    // A restored WebView can keep its live page while the
-                    // service re-announces the same URL after rotation.
-                    // Reload only when the server selected a different port
-                    // or token, otherwise the current page/history is lost.
-                    if (!restoredWebState || webView.url != value) webView.loadUrl(value)
-                    restoredWebState = false
+                    lastErrorMessage = null
+                    errorBar.visibility = View.GONE
+                    // Request interception runs on WebView's IO thread.
+                    lastReadyLaunchUrl = value
+                    readyHostConfirmed = true
+                    // Reuse the restored page/history when the same server
+                    // and authentication token are still alive.
+                    if (reload) {
+                        downloadPageReady = false
+                        webView.loadUrl(value)
+                    }
+                    else awaitDshUi()
+                    savePendingDownload()
                 }
                 DshService.ACTION_ERROR -> showError(value)
-                DshService.ACTION_LOG -> if (loading.visibility == View.VISIBLE) status.text = value
                 DshService.ACTION_EXITED -> {
+                    readyHostConfirmed = false
                     if (!terminalError && value != "stopped") showError(getString(R.string.exited_status))
                 }
             }
@@ -63,25 +93,50 @@ class MainActivity : Activity() {
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         setContentView(buildView())
         restoreWebState(savedInstanceState)
+        restoreFileOperations(savedInstanceState)
+        savedInstanceState?.getString(STATE_ERROR)?.let { showError(it) }
         registerBackCallback()
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 42)
         val filter = IntentFilter().apply {
-            addAction(DshService.ACTION_READY); addAction(DshService.ACTION_LOG)
-            addAction(DshService.ACTION_ERROR); addAction(DshService.ACTION_EXITED)
+            addAction(DshService.ACTION_READY)
+            addAction(DshService.ACTION_ERROR)
+            addAction(DshService.ACTION_EXITED)
         }
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        else registerReceiver(receiver, filter)
-        // DSH is the app's main surface. Starting it is part of opening the
-        // app, so users never land on an empty WebView or a separate browser.
-        startDsh(showLoading = !restoredWebState)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter,
+            DshService.INTERNAL_PERMISSION, null, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(receiver, filter, DshService.INTERNAL_PERMISSION, null)
+        // Opening the app always starts or reconnects to the real DSH host.
+        // The standard branded launch background remains until its UI mounts.
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Returning from another app also reconnects or starts the local host.
+        // READY from the same host preserves the existing page and picker DOM.
+        readyHostConfirmed = false
+        startDsh()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // The launcher or notification can deliver an intent to the current
+        // foreground instance without calling onStart, including just after
+        // the notification's Stop action terminated the local host.
+        readyHostConfirmed = false
+        startDsh()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun buildView(): android.view.View {
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+    private fun buildView(): View {
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.TRANSPARENT) }
         webView = WebView(this).apply {
+            visibility = View.INVISIBLE
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
@@ -89,10 +144,46 @@ class MainActivity : Activity() {
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-            webChromeClient = WebChromeClient()
+            setDownloadListener { url, userAgent, disposition, mimeType, _ ->
+                chooseDownloadDestination(url, userAgent, disposition, mimeType)
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    view: WebView,
+                    callback: ValueCallback<Array<Uri>>,
+                    parameters: FileChooserParams,
+                ): Boolean {
+                    pendingFileSelection?.onReceiveValue(null)
+                    pendingFileSelection = callback
+                    return try {
+                        startActivityForResult(parameters.createIntent(), FILE_SELECTION_REQUEST)
+                        true
+                    } catch (_: ActivityNotFoundException) {
+                        pendingFileSelection = null
+                        callback.onReceiveValue(null)
+                        Toast.makeText(this@MainActivity, R.string.file_picker_unavailable, Toast.LENGTH_SHORT).show()
+                        true
+                    }
+                }
+
+                override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                    // A plugin can recover from an individual request error.
+                    // Keep diagnostics; document failures and actual boot state
+                    // determine whether the application failed to start.
+                    webDiagnostics.append("${message.messageLevel()}: ${message.message()}")
+                    return true
+                }
+            }
             webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                    if (!WebNavigation.blocksForeignLoopbackRequest(request.url.toString(), lastReadyLaunchUrl)) return null
+                    // Cookies do not distinguish localhost ports. Block direct
+                    // cross-port resources before WebView sends any credentials.
+                    return WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", emptyMap(),
+                        ByteArrayInputStream(ByteArray(0)))
+                }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    return when (WebNavigation.classify(request.url.toString())) {
+                    return when (WebNavigation.classify(request.url.toString(), lastReadyLaunchUrl)) {
                         WebNavigationDecision.INTERNAL -> false
                         WebNavigationDecision.EXTERNAL_HTTP -> {
                             openExternalUrl(request.url)
@@ -103,67 +194,187 @@ class MainActivity : Activity() {
                 }
                 override fun onPageFinished(view: WebView, url: String) {
                     super.onPageFinished(view, url)
-                    if (LocalUrl.isAllowed(url)) loading.visibility = View.GONE
+                    if (!terminalError && WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)) {
+                        downloadPageReady = true
+                        awaitDshUi()
+                        savePendingDownload()
+                    }
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                     super.onReceivedError(view, request, error)
                     if (request.isForMainFrame) showError(error.description?.toString() ?: getString(R.string.web_load_error))
                 }
+                override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                    super.onReceivedHttpError(view, request, response)
+                    if (request.isForMainFrame) showError(getString(R.string.web_http_error, response.statusCode))
+                }
             }
         }
         root.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-
-        loading = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(32, 32, 32, 32)
-            setBackgroundColor(Color.WHITE)
-        }
-        val title = TextView(this).apply {
-            text = getString(R.string.app_name)
-            textSize = 24f
-            setTextColor(Color.rgb(24, 34, 52))
-            gravity = Gravity.CENTER
-        }
-        status = TextView(this).apply {
-            text = getString(R.string.starting_status)
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(90, 103, 122))
-            setPadding(0, 18, 0, 18)
-        }
-        val progress = ProgressBar(this).apply { isIndeterminate = true }
-        retry = Button(this).apply {
-            text = getString(R.string.retry)
+        errorBar = TextView(this).apply {
             visibility = View.GONE
-            setOnClickListener { startDsh() }
+            textSize = 14f
+            maxLines = 3
+            setTextColor(Color.rgb(122, 26, 26))
+            setBackgroundColor(Color.rgb(255, 236, 236))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            minHeight = dp(48)
+            contentDescription = getString(R.string.error_details)
+            setOnClickListener { showErrorDetails() }
         }
-        loading.addView(title)
-        loading.addView(status)
-        loading.addView(progress)
-        loading.addView(retry)
-        root.addView(loading, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(errorBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         return root
+    }
+
+    /** Reveal the real application, after its own plugin boot DOM has gone away. */
+    private fun awaitDshUi() {
+        val generation = ++uiCheckGeneration
+        val deadline = android.os.SystemClock.uptimeMillis() + 60_000
+        fun check() {
+            if (generation != uiCheckGeneration || terminalError || isFinishing || isDestroyed) return
+            if (android.os.SystemClock.uptimeMillis() >= deadline) {
+                showError(getString(R.string.web_boot_timeout, webDiagnostics.tail()))
+                return
+            }
+            webView.evaluateJavascript(UI_STATE_SCRIPT) { value ->
+                if (generation != uiCheckGeneration || terminalError || isFinishing || isDestroyed) return@evaluateJavascript
+                val state = runCatching { JSONObject(value) }.getOrNull()
+                val failure = state?.optString("error").orEmpty()
+                if (failure.isNotBlank()) {
+                    showError(failure)
+                } else if (state?.optBoolean("ready") == true) {
+                    webView.visibility = View.VISIBLE
+                } else {
+                    handler.postDelayed({ check() }, 200)
+                }
+            }
+        }
+        check()
     }
 
     private fun restoreWebState(savedInstanceState: Bundle?) {
         if (savedInstanceState == null) return
+        lastReadyLaunchUrl = savedInstanceState.getString(STATE_LAUNCH_URL)?.takeIf { LocalUrl.isAllowed(it) }
         val restored = runCatching { webView.restoreState(savedInstanceState) }.getOrNull()
         val restoredUrl = webView.url ?: restored?.currentItem?.url
-        restoredWebState = restored != null && restoredUrl?.let { LocalUrl.isAllowed(it) } == true
-        if (!restoredWebState) webView.clearHistory()
-        if (restoredWebState) loading.visibility = View.GONE
+        val restoredWebState = restored != null && WebNavigation.isCurrentOrigin(restoredUrl, lastReadyLaunchUrl)
+        if (!restoredWebState) {
+            webView.clearHistory()
+            lastReadyLaunchUrl = null
+        }
     }
 
-    private fun startDsh(showLoading: Boolean = true) {
-        terminalError = false
-        if (showLoading) {
-            loading.visibility = View.VISIBLE
-            retry.visibility = View.GONE
-            status.text = getString(R.string.starting_status)
+    private fun restoreFileOperations(savedInstanceState: Bundle?) {
+        if (savedInstanceState == null) return
+        savedInstanceState.getBundle(STATE_PENDING_DOWNLOAD)?.let { state ->
+            val url = state.getString("url")?.takeIf { LocalUrl.isAllowed(it) }
+            if (url != null) {
+                pendingDownload = AndroidDownloadRequest(url,
+                    AndroidDownloadPolicy.filename(state.getString("filename").orEmpty()),
+                    state.getString("mime") ?: "application/octet-stream", state.getString("userAgent"))
+                pendingDownloadDestination = state.getString("destination")?.let(Uri::parse)
+                    ?.takeIf { it.scheme == "content" }
+            }
         }
-        val intent = Intent(this, DshService::class.java).setAction(DshService.ACTION_START)
-        startForegroundService(intent)
+        if (savedInstanceState.getBoolean(STATE_FILE_OPERATION_INTERRUPTED)) {
+            Toast.makeText(this, R.string.file_operation_interrupted, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Activity result compatibility for the native WebView file picker")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == DOWNLOAD_DESTINATION_REQUEST) {
+            if (resultCode != RESULT_OK) {
+                pendingDownload = null
+                pendingDownloadDestination = null
+                return
+            }
+            if (pendingDownload == null) {
+                Toast.makeText(this, R.string.file_operation_interrupted, Toast.LENGTH_LONG).show()
+                return
+            }
+            pendingDownloadDestination = data?.data?.takeIf { it.scheme == "content" }
+            if (pendingDownloadDestination == null) {
+                pendingDownload = null
+                Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+                return
+            }
+            // A restored Activity waits for a fresh Service READY, then the
+            // corresponding page's cookie handshake, before using this URL.
+            savePendingDownload()
+            return
+        }
+        if (requestCode != FILE_SELECTION_REQUEST) return
+        val results = if (resultCode == RESULT_OK && data?.clipData != null) {
+            val clips = data.clipData!!
+            Array(clips.itemCount) { index -> clips.getItemAt(index).uri }
+        } else WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+        val selected = results
+            ?.filter { it.scheme == "content" }?.toTypedArray()
+        pendingFileSelection?.onReceiveValue(selected)
+        pendingFileSelection = null
+    }
+
+    private fun savePendingDownload() {
+        val request = pendingDownload ?: return
+        val destination = pendingDownloadDestination ?: return
+        if (!readyHostConfirmed) return
+        if (!WebNavigation.isCurrentOrigin(request.url, lastReadyLaunchUrl)) {
+            pendingDownload = null
+            pendingDownloadDestination = null
+            Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!downloadPageReady) return
+        pendingDownload = null
+        pendingDownloadDestination = null
+        if (!AndroidDownloadPolicy.isAllowed(request.url, webView.url, lastReadyLaunchUrl)) {
+            Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+            return
+        }
+        // Capture the current cookie only now, and never put it in savedState.
+        val cookie = CookieManager.getInstance().getCookie(request.url)
+        if (!downloads.save(request, destination, cookie) { result ->
+                if (isFinishing || isDestroyed) return@save
+                when (result) {
+                    AndroidDownloads.Result.SAVED -> Toast.makeText(this,
+                        getString(R.string.download_saved, request.filename), Toast.LENGTH_LONG).show()
+                    AndroidDownloads.Result.FAILED -> Toast.makeText(this,
+                        R.string.download_failed, Toast.LENGTH_LONG).show()
+                    AndroidDownloads.Result.CANCELLED -> Unit
+                }
+            }) Toast.makeText(this, R.string.download_busy, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun chooseDownloadDestination(url: String, userAgent: String?, disposition: String?, mimeType: String?) {
+        if (!AndroidDownloadPolicy.isAllowed(url, webView.url, lastReadyLaunchUrl)) {
+            Toast.makeText(this, R.string.download_local_only, Toast.LENGTH_LONG).show()
+            return
+        }
+        if (pendingDownload != null || downloads.isRunning) {
+            Toast.makeText(this, R.string.download_busy, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val filename = AndroidDownloadPolicy.filename(URLUtil.guessFileName(url, disposition, mimeType))
+        val type = mimeType?.substringBefore(';')?.trim()?.takeIf { it.contains('/') }
+            ?: "application/octet-stream"
+        pendingDownload = AndroidDownloadRequest(url, filename, type, userAgent ?: webView.settings.userAgentString)
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            setType(type)
+            putExtra(Intent.EXTRA_TITLE, filename)
+        }
+        try {
+            startActivityForResult(intent, DOWNLOAD_DESTINATION_REQUEST)
+        } catch (_: ActivityNotFoundException) {
+            pendingDownload = null
+            Toast.makeText(this, R.string.file_picker_unavailable, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun startDsh() {
+        startForegroundService(Intent(this, DshService::class.java).setAction(DshService.ACTION_START))
     }
 
     private fun openExternalUrl(uri: Uri) {
@@ -176,27 +387,52 @@ class MainActivity : Activity() {
 
     private fun showError(message: String) {
         terminalError = true
-        loading.visibility = android.view.View.VISIBLE
-        retry.visibility = android.view.View.VISIBLE
-        status.text = getString(R.string.error_status, message)
+        readyHostConfirmed = false
+        downloadPageReady = false
+        if (pendingDownloadDestination != null) {
+            pendingDownload = null
+            pendingDownloadDestination = null
+            Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+        }
+        ++uiCheckGeneration
+        lastErrorMessage = StartupDiagnostics.sanitize(message)
+        errorBar.text = getString(R.string.error_summary, lastErrorMessage?.lineSequence()?.firstOrNull().orEmpty())
+        errorBar.visibility = View.VISIBLE
+        // Existing DSH content and genuine WebView error pages remain visible.
+        if (webView.url != null && webView.url != "about:blank") webView.visibility = View.VISIBLE
     }
 
-    private fun navigateBackOrFinish() {
-        if (::webView.isInitialized && webView.canGoBack()) {
-            webView.goBack()
-        } else {
-            finish()
+    private fun showErrorDetails() {
+        val message = lastErrorMessage ?: return
+        val text = TextView(this).apply {
+            this.text = message
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setTextIsSelectable(true)
         }
+        val scroll = ScrollView(this).apply { addView(text) }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.error_details)
+            .setView(scroll)
+            .setPositiveButton(R.string.copy_error) { _, _ ->
+                (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
+                    .setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), message))
+                Toast.makeText(this, R.string.error_copied, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun navigateBackOrFinish() {
+        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else finish()
     }
 
     private fun registerBackCallback() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val callback = OnBackInvokedCallback { navigateBackOrFinish() }
         backInvokedCallback = callback
-        onBackInvokedDispatcher.registerOnBackInvokedCallback(
-            OnBackInvokedDispatcher.PRIORITY_DEFAULT,
-            callback,
-        )
+        onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
     }
 
     private fun unregisterBackCallback() {
@@ -207,21 +443,56 @@ class MainActivity : Activity() {
     }
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun onBackPressed() {
-        // API 30–32 do not have OnBackInvokedDispatcher. On API 33+ the
-        // callback registered in onCreate handles predictive/back gestures.
-        navigateBackOrFinish()
-    }
+    override fun onBackPressed() = navigateBackOrFinish()
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         if (::webView.isInitialized) webView.saveState(outState)
+        lastReadyLaunchUrl?.let { outState.putString(STATE_LAUNCH_URL, it) }
+        lastErrorMessage?.let { outState.putString(STATE_ERROR, it) }
+        pendingDownload?.let { request ->
+            outState.putBundle(STATE_PENDING_DOWNLOAD, Bundle().apply {
+                putString("url", request.url)
+                putString("filename", request.filename)
+                putString("mime", request.mimeType)
+                putString("userAgent", request.userAgent)
+                pendingDownloadDestination?.let { putString("destination", it.toString()) }
+            })
+        }
+        // Callback objects and running transfer handles belong to this Activity
+        // and are cancelled on destruction. The replacement must say so.
+        outState.putBoolean(STATE_FILE_OPERATION_INTERRUPTED,
+            pendingFileSelection != null || downloads.isRunning)
     }
 
     override fun onDestroy() {
+        pendingDownload = null
+        pendingDownloadDestination = null
+        downloads.close()
+        pendingFileSelection?.onReceiveValue(null)
+        pendingFileSelection = null
+        ++uiCheckGeneration
+        handler.removeCallbacksAndMessages(null)
         unregisterBackCallback()
         unregisterReceiver(receiver)
         webView.destroy()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val STATE_ERROR = "dsh.startup.error"
+        private const val STATE_LAUNCH_URL = "dsh.launch.url"
+        private const val STATE_PENDING_DOWNLOAD = "dsh.pending.download"
+        private const val STATE_FILE_OPERATION_INTERRUPTED = "dsh.file.operation.interrupted"
+        private const val FILE_SELECTION_REQUEST = 43
+        private const val DOWNLOAD_DESTINATION_REQUEST = 44
+        private val UI_STATE_SCRIPT = """
+            (function () {
+                const root = document.getElementById('root');
+                const boot = root && root.querySelector('[data-dsh-boot]');
+                const error = boot && /Failed to load plugins/.test(boot.innerText) ? boot.innerText : '';
+                return {ready: !!root && root.childElementCount > 0 && !boot, error: error};
+            })();
+        """.trimIndent()
     }
 }

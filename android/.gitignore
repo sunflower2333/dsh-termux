@@ -3,4 +3,5 @@
 **/build/
 local.properties
 app/src/main/assets/runtime/
+app/src/main/assets/licenses/native/
 app/src/main/jniLibs/

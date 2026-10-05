@@ -17,8 +17,24 @@ internal enum class WebNavigationDecision {
 
 /** URL classification kept free of Android framework types so it can be unit tested. */
 internal object WebNavigation {
-    fun classify(url: String): WebNavigationDecision {
-        if (LocalUrl.isAllowed(url)) return WebNavigationDecision.INTERNAL
+    /** Loopback cookies do not isolate ports; keep this WebView on its DSH host. */
+    fun isCurrentOrigin(url: String?, readyUrl: String?): Boolean {
+        if (url == null || readyUrl == null || !LocalUrl.isAllowed(url) || !LocalUrl.isAllowed(readyUrl)) return false
+        val target = URI(url)
+        val ready = URI(readyUrl)
+        return target.scheme == ready.scheme && target.host == ready.host && target.port == ready.port
+    }
+
+    /** Image/subresource requests and POST navigations bypass navigation callbacks. */
+    fun blocksForeignLoopbackRequest(url: String, readyUrl: String?): Boolean {
+        val target = runCatching { URI(url) }.getOrNull() ?: return false
+        val loopbackHttp = target.host == "127.0.0.1" &&
+            target.scheme?.lowercase(Locale.ROOT) in setOf("http", "https")
+        return loopbackHttp && !isCurrentOrigin(url, readyUrl)
+    }
+
+    fun classify(url: String, readyUrl: String?): WebNavigationDecision {
+        if (isCurrentOrigin(url, readyUrl)) return WebNavigationDecision.INTERNAL
 
         val scheme = runCatching { URI(url).scheme?.lowercase(Locale.ROOT) }.getOrNull()
         return when (scheme) {

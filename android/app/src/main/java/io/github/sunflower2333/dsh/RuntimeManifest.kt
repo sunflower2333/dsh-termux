@@ -14,6 +14,7 @@ data class RuntimeManifest(
     val host: String,
     val port: Int,
     val webPath: String,
+    val bundleSha256: String? = null,
 ) {
     companion object {
         private const val SCHEMA = 1
@@ -36,7 +37,9 @@ data class RuntimeManifest(
             require(port in 0..65535) { "invalid web port" }
             val path = web.optString("path", "/")
             require(path.startsWith('/') && !path.contains("\\") && !path.contains("..")) { "invalid web path" }
-            return RuntimeManifest(SCHEMA, version, executable, entrypoint, args, host, port, path)
+            val bundleSha256 = if (root.has("bundleSha256")) root.getString("bundleSha256") else null
+            require(bundleSha256 == null || bundleSha256.matches(Regex("[a-f0-9]{64}"))) { "invalid runtime bundle checksum" }
+            return RuntimeManifest(SCHEMA, version, executable, entrypoint, args, host, port, path, bundleSha256)
         }
 
         fun requireRelativePath(path: String) {

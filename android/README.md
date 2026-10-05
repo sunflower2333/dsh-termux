@@ -1,6 +1,7 @@
 # DeepSeek Harness Android
 
 This is a small native Android client for the existing DeepSeek Harness web UI.
+It requires Android 11 (API 30) or newer on an ARM64 device.
 `MainActivity` hosts the UI in a loopback-only `WebView`; `DshService` starts DSH in an Android
 foreground service and keeps a resident notification while the app is in the
 background. The service does not expose a LAN listener and does not enable
@@ -16,6 +17,8 @@ app/src/main/assets/runtime/manifest.json
 app/src/main/assets/runtime/runtime.zip
 app/src/main/jniLibs/arm64-v8a/libdsh_node.so
 app/src/main/jniLibs/arm64-v8a/libc++_shared.so
+app/src/main/jniLibs/arm64-v8a/libdsh_esbuild.so
+app/src/main/jniLibs/arm64-v8a/libdsh_bash.so
 ```
 
 The Gradle `verifyRuntimeAssets` task deliberately fails when these files are
@@ -32,14 +35,57 @@ missing. It must never produce an APK containing an empty or fake runtime.
     "entrypoint": "runtime/dsh.cjs",
     "arguments": ["web", "--no-open", "--host", "127.0.0.1", "--port", "0"]
   },
-  "web": { "host": "127.0.0.1", "port": 0, "path": "/" }
+  "web": { "host": "127.0.0.1", "port": 0, "path": "/" },
+  "bundleSha256": "<SHA-256 of runtime.zip>"
 }
 ```
 
 `runtime.zip` is extracted into app-private storage and is checked for path
 traversal before any entry is written. The entrypoint is checked after
-extraction. The native executable is loaded from Android's extracted native
-library directory so it is not copied from writable storage and executed.
+extraction. The bundle checksum also identifies the installation, so APK
+updates replace DSH files even when Node's version is unchanged. Node, Bash and
+esbuild execute from Android's extracted native library directory; modern
+Android does not permit execution from writable app data.
+Private command-name symlinks expose `node`, `bash` and `esbuild` on PATH and
+are rebound after APK updates. DSH's Bash executor runs GNU Bash rather than
+Android's system shell. Bash's license and source information are bundled.
+Node's complete third-party license notices and the NDK libc++ notices are
+included in APK assets alongside the upstream icon license.
+No startup pass walks or chmods the JavaScript dependency tree; executable
+permissions are checked on the package-manager-installed native commands.
+Android staging omits optional JavaScript source maps, Windows debug symbols
+and Koffi compiler objects. Type declarations, declaration maps, licenses and
+plugin documents remain included; the full Termux package retains all files.
+
+Opening the app starts DSH automatically and reveals its real WebView UI.
+The official desktop icon is used for the launcher and standard Android launch window;
+there is no native start screen, spinner, or retry button. Startup failures
+appear in a bottom message whose details can be selected or copied. Sanitized
+process and WebView logs are retained in the private cache directory.
+The desktop PNG is copied from
+[`apps/desktop/resources/icon-windows.png`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/apps/desktop/resources/icon-windows.png).
+The notification uses the official `FishLogo` silhouette. The upstream MIT
+license is also included in APK assets.
+
+The launcher enables `--expose-internals` for DSH's main and Worker module
+resolvers, since its upstream native resolver helper has no Bionic support.
+The default workspace lives under the app-private Documents directory.
+
+The browser bundles target Android 11's WebView 83. Pinned compatibility
+libraries load before DSH's bootstrap, with their licenses included in the
+runtime. Newer WebViews keep their native implementations. File inputs use
+Android's system document picker. Session exports use Android's Save As picker
+and retain DSH's local authentication without forwarding it through redirects.
+Rotation preserves the existing WebView and pending picker callbacks.
+When the keyboard leaves a short viewport, the chat header and composer use a
+compact layout while keeping Chat, Trajectory and the workspace panel available.
+Attachment menus fit inside the actual conversation area and scroll their
+remaining options.
+
+Android 11 does not provide DSH's desktop Bash sandbox. The default workspace
+policy remains enabled; a Bash command that requires unsandboxed execution
+must request DSH's existing single-command approval. The app does not silently
+grant full access or label the Android app UID as workspace isolation.
 
 Generate the runtime from the real package and Node build before assembling an
 APK (the staging script fails if either input is missing):
@@ -47,6 +93,8 @@ APK (the staging script fails if either input is missing):
 ```bash
 ANDROID_NDK_HOME=/path/to/ndk \
   ../scripts/build-android-node.sh
+ANDROID_NDK_HOME=/path/to/ndk \
+  ../scripts/build-android-bash.sh
 ../scripts/stage-android-runtime.sh   # consumes dist/dsh-termux.tgz
 ```
 
@@ -62,8 +110,49 @@ Use JDK 17 or newer, Android SDK 35, and Gradle 8.9 (AGP 8.7.3). From this direc
 ./gradlew --no-daemon --max-workers=3 :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-The unit tests cover loopback URL filtering and ZIP traversal rejection. The
+The unit tests cover loopback URL filtering, ZIP traversal rejection, runtime
+bundle identity, sanitized startup diagnostics, and authenticated export
+streaming with redirect rejection and cancellation. The
 APK tasks intentionally stop at `verifyRuntimeAssets` when the real bundle is
 not staged. A device or emulator is still required to validate Android process
 lifetime, WebView JavaScript behavior, notification permission, and
 foreground-service survival across app switching.
+
+For a GitHub build, open a successful **Build DSH Android** run from the
+`android` branch and download its `dsh-android-<run number>` artifact from the
+Artifacts section. GitHub requires a signed-in account for artifact downloads.
+Unzip the artifact to obtain the signed APK and its SHA-256 file.
+CI currently generates a fresh testing signing key for each run. To install an
+APK from a different run, export any needed sessions and uninstall the previous
+CI build first; Android does not allow updates signed by a different key.
+
+For the real WebUI, run a disposable DSH service with a temporary HOME and
+save its authenticated launch URL in a private text file. With Python Playwright
+and Chromium installed:
+
+```bash
+python ../scripts/verify-live-android-ui.py \
+  --url-file /path/to/private-test-url.txt \
+  --output-dir /path/to/ui-results \
+  --chromium /usr/bin/chromium
+```
+
+This verifies the actual DSH page at phone widths, menus, and saved theme/language
+settings. It does not substitute for APK Activity/WebView or model-request tests.
+
+For controlled chat and Bash approval tests, start the loopback-only Messages
+fixture and use another disposable DSH HOME:
+
+```bash
+python ../scripts/test-support/messages-fixture-server.py --help
+python ../scripts/test-support/verify-controlled-chat.py \
+  --url-file /path/to/private-test-url.txt \
+  --fixture-file /path/to/fixture/server.json \
+  --output-dir /path/to/chat-results \
+  --chromium /usr/bin/chromium
+```
+
+This drives DSH's real provider settings, streams, Stop button, queue,
+single-command approval, rejection, and saved conversations. Responses come
+from the fixture; it does not verify real DeepSeek inference. APK lifecycle,
+IME, file dialogs, and native addons must also be tested on Android.

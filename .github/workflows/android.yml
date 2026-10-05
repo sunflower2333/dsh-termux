@@ -83,6 +83,15 @@ jobs:
           set -euo pipefail
           bash scripts/build-android-node.sh
 
+      - name: Build the arm64 Bash Android runtime
+        shell: bash
+        env:
+          JOBS: 4
+          ANDROID_API: 30
+        run: |
+          set -euo pipefail
+          bash scripts/build-android-bash.sh
+
       - name: Stage the Android runtime bundle
         shell: bash
         run: |

@@ -1,0 +1,415 @@
+/* dsh-android-mobile */
+/* Fortune measures its canvas when the viewport changes. Keep footer height
+   changes immediate, so that measurement does not capture an animation frame. */
+.fortune-container .luckysheet-sheet-area {
+  transition-property: color, background-color, border-color !important;
+}
+@media screen and (max-width: 600px), screen and (pointer: coarse) and (max-width: 900px) {
+  html, body, #root {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    overscroll-behavior: none !important;
+  }
+
+  body {
+    -webkit-text-size-adjust: 100% !important;
+    touch-action: manipulation !important;
+  }
+
+
+  /* The real shell uses a desktop sidebar and composer, not DockKit panes. */
+  .pI_x6G_frame {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: 56px minmax(0, 1fr) !important;
+    --dsh-frame-leading-clearance: 0px !important;
+  }
+  .pI_x6G_sidebarCol {
+    grid-area: 1 / 1 !important;
+    border-right: 0 !important;
+    border-bottom: .5px solid var(--dsw-alias-border-l3) !important;
+  }
+  .pI_x6G_centerCol { grid-area: 2 / 1 !important; }
+  .pI_x6G_handle, .wSkVaW_widthHandle { display: none !important; }
+  .pI_x6G_frame:not([data-sidebar-collapsed]) .pI_x6G_sidebarCol {
+    position: absolute !important;
+    top: 0 !important;
+    right: auto !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    z-index: 30 !important;
+    width: min(320px, calc(100vw - 48px)) !important;
+    box-shadow: 8px 0 24px #0003 !important;
+    border-right: .5px solid var(--dsw-alias-border-l3) !important;
+  }
+  .hHd-Xa_root.hHd-Xa_collapsed {
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 4px !important;
+    padding: 6px 8px !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .hHd-Xa_collapsed .hHd-Xa_logoRow,
+  .hHd-Xa_collapsed .hHd-Xa_panelList,
+  .hHd-Xa_collapsed .hHd-Xa_regionArea,
+  .hHd-Xa_collapsed [data-slot="sidebar.workspaces"] > div,
+  .hHd-Xa_collapsed .bhn1Oq_sectionHeader,
+  .hHd-Xa_collapsed .bhn1Oq_headerActions,
+  .hHd-Xa_collapsed .bhn1Oq_search,
+  .hHd-Xa_collapsed .hHd-Xa_settingsArea,
+  .hHd-Xa_collapsed .VOzbGW_triggerRow {
+    display: contents !important;
+  }
+  .hHd-Xa_collapsed .bhn1Oq_listArea { display: none !important; }
+  .hHd-Xa_collapsed .hHd-Xa_footArea { margin-left: auto !important; }
+  .hHd-Xa_collapsed .hHd-Xa_newSession { margin: 0 !important; align-self: auto !important; }
+  .hHd-Xa_collapsed .hHd-Xa_iconButton,
+  .hHd-Xa_collapsed .hHd-Xa_newSession,
+  .hHd-Xa_collapsed .hHd-Xa_panelRow,
+  .hHd-Xa_collapsed .bhn1Oq_iconButton,
+  .hHd-Xa_collapsed .bhn1Oq_searchButton,
+  .hHd-Xa_collapsed .VOzbGW_trigger {
+    flex: none !important;
+    width: 44px !important;
+    height: 44px !important;
+    margin: 0 !important;
+  }
+  [data-rightbar-col="true"] {
+    position: absolute !important;
+    top: 56px !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    z-index: 20 !important;
+  }
+  /* A phone has no desktop right track, but its open panel is fullscreen. */
+  [data-rightbar-collapsed]:not([data-rightbar-fullscreen]) [data-rightbar-col="true"] { display: none !important; }
+  [data-conversation-content] {
+    --dsh-chat-content-width: calc(100% - 24px) !important;
+    --dsh-composer-card-max-width: calc(100% - 16px) !important;
+    --dsh-composer-side-clearance: 8px !important;
+  }
+  [data-conversation-scroll] { scrollbar-gutter: auto !important; margin-right: 0 !important; }
+  /* The input menu belongs to this scroll surface. Its upstream viewport-only
+     limit lets its first rows extend behind the conversation header and clip.
+     These live measurements come from the composer's ResizeObserver. */
+  [data-conversation-content][data-content-phase="active"] [data-trigger-menu] {
+    max-height: max(0px, min(400px, calc(var(--dsh-conversation-viewport-height) - var(--dsh-composer-height) - 8px))) !important;
+  }
+  .wSkVaW_header { padding-left: 12px !important; padding-right: 12px !important; }
+  .wSkVaW_headerCorner { margin-right: 0 !important; }
+  /* Keep the spreadsheet footer around its enlarged mobile touch controls. */
+  .fortune-container .luckysheet-sheet-area {
+    height: 44px !important;
+    min-height: 44px !important;
+    flex-shrink: 0 !important;
+  }
+  .fortune-container .fortune-zoom-ratio-current {
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+  .wSkVaW_composerHero { padding-bottom: 16px !important; }
+  .wSkVaW_heroWorkspaceRow { flex-wrap: wrap !important; gap: 4px !important; padding: 0 12px !important; }
+  .pXSMma_workspace, .cubgiG_seat { max-width: 100% !important; }
+  .pXSMma_root { padding-left: 12px !important; padding-right: 12px !important; }
+  .pXSMma_headline { font-size: 24px !important; line-height: 30px !important; }
+  [data-composer-input] { min-height: 52px !important; font-size: 16px !important; }
+  [data-composer-placeholder] { white-space: normal !important; }
+  .uV2eYG_row { gap: 8px !important; }
+  .uV2eYG_tools, .uV2eYG_modes, .uV2eYG_trailing { gap: 4px !important; }
+
+  /* Settings become a horizontal section picker above the complete form. */
+  [data-shortcut-modal="settings"] {
+    flex-direction: column !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    height: calc(100vh - 16px) !important;
+    height: calc(100dvh - 16px) !important;
+    max-height: calc(100vh - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    overflow: hidden !important;
+  }
+  .VOzbGW_nav { width: 100% !important; gap: 8px !important; padding: 12px 8px 0 !important; }
+  .VOzbGW_navTitle { padding-left: 8px !important; padding-right: 8px !important; }
+  .VOzbGW_navList { flex-direction: row !important; flex-shrink: 0 !important; overflow-x: auto !important; }
+  .VOzbGW_navCell { flex: none !important; padding-left: 10px !important; padding-right: 10px !important; }
+  .VOzbGW_content { min-height: 0 !important; }
+  .VOzbGW_header { height: auto !important; min-height: 52px !important; padding: 4px 12px !important; align-items: center !important; }
+  .VOzbGW_options { padding: 0 16px 16px !important; overflow-x: hidden !important; }
+  [data-slot="settings.general.item"] > div { flex-wrap: wrap !important; gap: 12px !important; }
+  [data-slot="settings.general.item"] > div[class$="_row"] > div:first-child { flex: 1 1 170px !important; min-width: 0 !important; }
+  .bVCLcG_stepper { min-height: 44px !important; height: auto !important; gap: 8px !important; padding-left: 8px !important; padding-right: 8px !important; }
+  .bVCLcG_arrows { flex-direction: row !important; position: static !important; opacity: 1 !important; }
+  .bVCLcG_arrow { min-width: 44px !important; min-height: 44px !important; }
+  ._8HJdBW_cubeRow { flex-direction: row !important; flex-wrap: nowrap !important; gap: 8px !important; }
+  ._8HJdBW_themeCube { min-width: 0 !important; flex: 1 1 0 !important; }
+  .zGbnIq_rowHead, .zGbnIq_rowActions, .zGbnIq_editorActions { flex-wrap: wrap !important; }
+  .zGbnIq_modelRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; }
+  .zGbnIq_modelAdvanced { grid-template-columns: minmax(0, 1fr) !important; }
+  .zGbnIq_addButton { min-width: 0 !important; }
+  [role="dialog"] [class$="_editorActions"] { flex-wrap: wrap !important; }
+  [role="dialog"] [class$="_content"] { min-width: 0 !important; }
+
+  /* DockKit panes must be allowed to shrink below the desktop tab width. */
+  [data-dockkit-surface], dockkit-surface,
+  [data-dockkit-split], dockkit-split {
+    min-width: 0 !important;
+    min-height: 0 !important;
+  }
+  [data-dockkit-split], dockkit-split {
+    flex-direction: column !important;
+  }
+  [data-dockkit-cell], dockkit-cell {
+    min-width: 0 !important;
+    min-height: 0 !important;
+    flex-basis: 0 !important;
+  }
+  [data-dockkit-divider], dockkit-divider {
+    width: 100% !important;
+    height: 0 !important;
+    touch-action: none !important;
+  }
+  [data-dockkit-strip], dockkit-strip {
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+    height: 44px !important;
+    padding-top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    padding-left: max(8px, env(safe-area-inset-left, 0px)) !important;
+    padding-right: max(8px, env(safe-area-inset-right, 0px)) !important;
+    touch-action: pan-x !important;
+  }
+  [data-dockkit-strip-tabs], dockkit-strip-tabs {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+  }
+  [data-dockkit-tab], dockkit-tab {
+    min-width: 48px !important;
+    min-height: 44px !important;
+    max-width: 68vw !important;
+    flex: 0 1 auto !important;
+  }
+  [data-dockkit-strip-chrome], dockkit-strip-chrome {
+    gap: 4px !important;
+    margin-left: 2px !important;
+  }
+  [data-dockkit-split-button], dockkit-split-button,
+  [data-dockkit-add-tab], dockkit-add-tab,
+  [data-dockkit-tab-close], dockkit-tab-close {
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+  [data-dockkit-float], dockkit-float {
+    box-sizing: border-box !important;
+    left: 8px !important;
+    top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100vh - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+  }
+  [data-dockkit-float-resize] {
+    display: none !important;
+  }
+
+  /* Menus, listboxes and dialogs stay inside the WebView viewport. */
+  [role="menu"], [role="listbox"] {
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: min(60vh, 420px) !important;
+    max-height: min(60dvh, 420px) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"] {
+    min-height: 44px !important;
+    box-sizing: border-box !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+  }
+  [role="dialog"][aria-modal="true"], [role="alertdialog"] {
+    box-sizing: border-box !important;
+    width: min(100%, calc(100vw - 24px)) !important;
+    max-width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px) !important;
+    max-height: calc(100dvh - 24px) !important;
+    overflow: auto !important;
+    overscroll-behavior: contain !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  button, input, select, textarea, [role="button"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"] {
+    touch-action: manipulation !important;
+  }
+  button, [role="button"], [role="tab"] {
+    min-width: 44px !important;
+    min-height: 44px !important;
+    flex-shrink: 0 !important;
+  }
+  button[role="switch"] {
+    width: 44px !important;
+    height: 44px !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+  button[role="switch"]::before {
+    content: "";
+    position: absolute;
+    top: 12px;
+    left: 4px;
+    width: 36px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--dsw-alias-border-l3);
+  }
+  button[role="switch"][aria-checked="true"]::before { background: var(--dsw-alias-brand-primary); }
+  button[role="switch"] > span { position: absolute !important; top: 14px !important; left: 6px !important; }
+  textarea {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+    max-height: 38vh !important;
+    max-height: 38dvh !important;
+    resize: vertical !important;
+  }
+  input, select {
+    max-width: 100% !important;
+    min-height: 44px !important;
+    box-sizing: border-box !important;
+  }
+  pre, code, [data-terminal], [data-read], [data-search], [data-diff] {
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  table {
+    max-width: 100% !important;
+  }
+  img, video, iframe {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Android 11 ships WebView 83. It accepts gap for grids, but not flexboxes,
+     so @supports(gap) cannot detect this case. inset arrived in Chromium 87;
+     use that boundary and disable gap before supplying flex-item margins. */
+  @supports not (inset: 0) {
+    /* The upstream shell and composer also position these with inset. */
+    .pI_x6G_overlayLayer,
+    .uV2eYG_cardWorkspaceTrigger::after {
+      top: 0 !important;
+      right: 0 !important;
+      bottom: 0 !important;
+      left: 0 !important;
+    }
+    .uV2eYG_overlayAnchor {
+      top: 0 !important;
+      right: 0 !important;
+      bottom: auto !important;
+      left: 0 !important;
+    }
+    .uV2eYG_placeholder {
+      top: 4px !important;
+      right: 8px !important;
+      bottom: auto !important;
+      left: 14px !important;
+    }
+    .hHd-Xa_root.hHd-Xa_collapsed,
+    .wSkVaW_heroWorkspaceRow,
+    .uV2eYG_row, .uV2eYG_tools, .uV2eYG_modes, .uV2eYG_trailing,
+    .VOzbGW_nav, .VOzbGW_navList, .VOzbGW_navCell,
+    [data-slot="settings.general.item"] > div,
+    .bVCLcG_stepper, .bVCLcG_arrows,
+    ._8HJdBW_cubeRow,
+    .zGbnIq_rowHead, .zGbnIq_rowActions, .zGbnIq_editorActions,
+    [data-dockkit-strip-chrome], dockkit-strip-chrome {
+      gap: 0 !important;
+    }
+    /* Toolbar wrappers use display:contents, so space the actual controls. */
+    .hHd-Xa_collapsed .hHd-Xa_iconButton,
+    .hHd-Xa_collapsed .hHd-Xa_newSession,
+    .hHd-Xa_collapsed .hHd-Xa_panelRow,
+    .hHd-Xa_collapsed .bhn1Oq_iconButton,
+    .hHd-Xa_collapsed .bhn1Oq_searchButton,
+    .hHd-Xa_collapsed .VOzbGW_trigger {
+      margin-right: 4px !important;
+    }
+    .wSkVaW_heroWorkspaceRow > * + *,
+    .uV2eYG_tools > * + *, .uV2eYG_modes > * + *, .uV2eYG_trailing > * + *,
+    .VOzbGW_navList > * + *,
+    [data-dockkit-strip-chrome] > * + *, dockkit-strip-chrome > * + * {
+      margin-left: 4px !important;
+    }
+    .uV2eYG_row > * {
+      margin-right: 8px !important;
+      margin-bottom: 8px !important;
+    }
+    .uV2eYG_row > :last-child { margin-right: 0 !important; }
+    .VOzbGW_nav > * + * { margin-top: 8px !important; }
+    .VOzbGW_navCell > * + *,
+    .bVCLcG_stepper > * + *,
+    ._8HJdBW_cubeRow > * + * { margin-left: 8px !important; }
+    .bVCLcG_arrows > * + * { margin-left: 2px !important; }
+    [data-slot="settings.general.item"] > div > * {
+      margin-right: 12px !important;
+      margin-bottom: 12px !important;
+    }
+    [data-slot="settings.general.item"] > div > :last-child { margin-right: 0 !important; }
+    .zGbnIq_rowHead > * { margin-right: 10px !important; }
+    .zGbnIq_rowActions > * { margin-right: 4px !important; }
+    .zGbnIq_editorActions > * { margin-right: 8px !important; }
+    .zGbnIq_rowHead > :last-child,
+    .zGbnIq_rowActions > :last-child,
+    .zGbnIq_editorActions > :last-child { margin-right: 0 !important; }
+  }
+}
+/* adjustResize already gives WebView the keyboard's remaining height. Budget
+   that space for readable history and the complete editor, retaining 44px
+   actions. Session title/mode utilities and footer statistics return when the
+   keyboard closes; Chat/Trajectory and the workspace panel remain available. */
+@media screen and (max-width: 600px) and (max-height: 420px),
+       screen and (pointer: coarse) and (max-width: 900px) and (max-height: 420px) {
+  .pI_x6G_frame { grid-template-rows: 44px minmax(0, 1fr) !important; }
+  .hHd-Xa_root.hHd-Xa_collapsed { padding-top: 0 !important; padding-bottom: 0 !important; }
+  [data-rightbar-col="true"] { top: 44px !important; }
+  .wSkVaW_header {
+    min-height: 44px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    /* titleRow uses inline-size containment upstream, so an auto track has
+       zero intrinsic width even when its remaining corner button is 44px. */
+    grid-template-columns: minmax(0, 1fr) 44px !important;
+  }
+  [data-conversation-header-leading] { display: none !important; }
+  .wSkVaW_titleRow {
+    grid-area: 1 / 2 !important;
+    width: 44px !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+    justify-content: flex-end !important;
+  }
+  .wSkVaW_titleCluster, .wSkVaW_headerUtilities { display: none !important; }
+  .wSkVaW_headerCorner { margin-left: 0 !important; }
+  [data-conversation-tabs] {
+    grid-area: 1 / 1 !important;
+    margin-top: 0 !important;
+    padding-left: 0 !important;
+    gap: 16px !important;
+    align-items: center !important;
+  }
+  [data-conversation-tabs] [role="tab"] { padding-top: 0 !important; padding-bottom: 0 !important; }
+  [data-composer-seat] { --dsh-composer-text-max-height: 56px !important; }
+  [data-composer-input] { min-height: 36px !important; }
+  .uV2eYG_card { gap: 4px !important; padding-top: 4px !important; }
+  .uV2eYG_row { padding-top: 0 !important; padding-bottom: 0 !important; }
+  .uV2eYG_row > * { margin-bottom: 0 !important; }
+  .uV2eYG_dock { display: none !important; }
+}
+/* dsh-android-mobile-end */

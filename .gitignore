@@ -1,0 +1,4 @@
+/build/
+/build-bash-android/
+/dist/
+__pycache__/

@@ -155,10 +155,13 @@ ndk_libcxx="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/
 [[ -f "$ndk_libcxx" ]] || { echo "NDK libc++_shared.so not found: $ndk_libcxx" >&2; exit 1; }
 
 rm -rf "$OUTPUT_DIR"
-mkdir -p "$OUTPUT_DIR/lib/$ANDROID_ABI" "$OUTPUT_DIR/include/node"
+mkdir -p "$OUTPUT_DIR/lib/$ANDROID_ABI" "$OUTPUT_DIR/include/node" "$OUTPUT_DIR/licenses"
 cp "$node_bin" "$OUTPUT_DIR/lib/$ANDROID_ABI/libdsh_node.so"
 chmod 0755 "$OUTPUT_DIR/lib/$ANDROID_ABI/libdsh_node.so"
 cp "$ndk_libcxx" "$OUTPUT_DIR/lib/$ANDROID_ABI/libc++_shared.so"
+cp "$NODE_SOURCE_DIR/LICENSE" "$OUTPUT_DIR/licenses/node-LICENSE.txt"
+cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/NOTICE" \
+  "$OUTPUT_DIR/licenses/libcxx-NOTICE.txt"
 
 # The JNI bridge needs the public Node and V8 headers.  Keep the tree under a
 # stable include/node path so the Android project can compile against this

@@ -21,6 +21,18 @@ The release package is generated from the published `@deepseek-ai/dsh` npm packa
 9. **Android subprocess and shell compatibility**
    Android reports `process.platform === "android"` even though its `/proc`, process-group and ARM64 syscall interfaces follow Linux. The subprocess terminal inspector reuses the Linux implementation, and shell defaults/ENOEXEC fallback use `/system/bin/sh` instead of the unavailable `/bin/sh` path.
 10. **Android WebView responsive surface**
-   The published web frontend is desktop-first and its DockKit panes, menus and dialogs can exceed a phone viewport. The package patch appends a guarded mobile stylesheet to the frontend's hashed index CSS: panes collapse vertically, tab strips scroll, controls receive touch-safe dimensions, overlays stay within the viewport, and code/media blocks retain local horizontal scrolling. The patch uses the generated `data-dockkit-*` attributes so it remains independent of minified class names.
+   The published web frontend is desktop-first. The mobile stylesheet turns the sidebar into a toolbar and drawer, keeps the composer inside the viewport, and puts settings sections above the full-width form. It also adapts DockKit panes, menus and dialogs, increases touch targets, and preserves local scrolling for code. CSS-module selectors are resolved and checked against the actual plugin bundles; incompatible upstream styles fail packaging. Existing mobile layers are replaced rather than duplicated.
+
+   Browser bundles and embedded PDF workers are also lowered for Android 11's WebView 83. Pinned core-js and inert compatibility libraries load before every bootstrap script, and their licenses are bundled. Audited DOM, cancellation and upload gaps receive feature-detected fallbacks; native APIs remain in use on newer WebViews. Garbage collection APIs are not globally emulated.
+
+   Android's unavailable Bash sandbox error explains the existing single-command approval parameters. It still refuses to execute without enforcement or explicit approval, and does not change the session permission preset.
+
+   Session JSONL write leases use Bionic's real nonblocking `flock` through Koffi on Android, retaining the upstream stable-inode check and descriptor lifetime. Contention and invalid descriptors retain their errno values; close or process exit releases the lock. The original platform bindings remain unchanged elsewhere.
+11. **Node internal module resolution**
+   Upstream `node-addon-require-builtin` has no usable Android binding. The launcher enables `--expose-internals`, and the main and Worker resolvers use Node's actual internal CommonJS loader. Other launch modes retain the upstream addon path. Verification exercises the real plugin-package and runtime-resolution APIs in both the main process and a Worker.
+12. **Android default workspace**
+   Android has no desktop Documents-directory lookup. The Android service supplies an app-private Documents directory; standalone Android CLI launches fall back to Documents under the user's home. Explicit upstream workspace overrides retain precedence.
+
+The offline package removes development dependency classifications before `npm pack`, since runtime packages classified as development dependencies are otherwise omitted from the bundled archive. Verification checks every declared dependency in the source tree and packed tarball.
 
 Every source replacement is guarded by an exact one-match assertion. An upstream refactor therefore fails the workflow for review instead of silently producing an unpatched release.

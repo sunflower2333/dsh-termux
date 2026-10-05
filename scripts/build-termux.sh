@@ -47,7 +47,9 @@ find_lock_version() {
 npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional --os=android --cpu=arm64
 ESBUILD_VERSION="$(npm view @esbuild/android-arm64 version)"
 SHARP_VERSION="$(find_lock_version sharp)"
-npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts "node-gyp@12.4.0"
+npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts \
+  "node-gyp@12.4.0" "esbuild@0.28.2" "core-js-bundle@3.50.0" "wicg-inert@3.1.3" \
+  "@formatjs/intl-segmenter@12.2.15" "@formatjs/intl-localematcher@0.9.0" "@formatjs/fast-memoize@3.1.7"
 npm install --prefix "$BUILD_ROOT" --ignore-scripts --no-save --force --os=android --cpu=arm64 \
   "esbuild@$ESBUILD_VERSION" \
   "sharp@$SHARP_VERSION" \
@@ -65,7 +67,7 @@ mkdir -p "$PACKAGE_DIR/node_modules"
 cp -a "$BUILD_ROOT/node_modules/." "$PACKAGE_DIR/node_modules/"
 rm -rf "$PACKAGE_DIR/node_modules/@deepseek-ai/dsh"
 
-node scripts/patch-dsh.mjs "$PACKAGE_DIR"
+node scripts/patch-dsh.mjs "$PACKAGE_DIR" "$BUILD_ROOT/tools"
 
 KOFFI="$PACKAGE_DIR/node_modules/koffi"
 REAL_CMAKE="$(command -v cmake)"
@@ -120,6 +122,7 @@ file "$NODE_PTY/prebuilds/android-arm64/pty.node" | grep -F "ARM aarch64"
 file "$KOFFI/build/koffi/android_arm64/koffi.node" | grep -F "ARM aarch64"
 
 (cd "$PACKAGE_DIR" && npm pack --pack-destination "$OUTPUT_DIR")
+node scripts/verify-package.mjs "$PACKAGE_DIR" "$TERMUX_VERSION" "$OUTPUT_DIR/dsh-termux-${TERMUX_VERSION}.tgz"
 tar -tzf "$OUTPUT_DIR/dsh-termux-${TERMUX_VERSION}.tgz" \
   | grep -Fx "package/node_modules/node-pty/prebuilds/android-arm64/pty.node"
 (cd "$OUTPUT_DIR" && sha256sum "dsh-termux-${TERMUX_VERSION}.tgz" > "dsh-termux-${TERMUX_VERSION}.tgz.sha256")

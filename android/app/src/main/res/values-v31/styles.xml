@@ -5,5 +5,8 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">@drawable/dsh_launch_background</item>
+        <item name="android:windowSplashScreenBackground">@color/dsh_launch_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 </resources>

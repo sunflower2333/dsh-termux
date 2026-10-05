@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 NODE_DIST="${NODE_DIST:-$ROOT_DIR/dist/node-android}"
+BASH_DIST="${BASH_DIST:-$ROOT_DIR/dist/bash-android}"
 ANDROID_DIR="${ANDROID_DIR:-$ROOT_DIR/android/app/src/main}"
 DSH_PACKAGE_DIR="${DSH_PACKAGE_DIR:-}"
 DSH_PACKAGE_TGZ="${DSH_PACKAGE_TGZ:-$ROOT_DIR/dist/dsh-termux.tgz}"
@@ -14,8 +15,10 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/build/android-runtime}"
 manifest="$NODE_DIST/manifest.json"
 node_lib="$NODE_DIST/lib/arm64-v8a/libdsh_node.so"
 cxx_lib="$NODE_DIST/lib/arm64-v8a/libc++_shared.so"
-for required in "$manifest" "$node_lib" "$cxx_lib"; do
-  [[ -f "$required" ]] || { echo "missing Node runtime output: $required" >&2; exit 1; }
+bash_lib="$BASH_DIST/lib/arm64-v8a/libdsh_bash.so"
+for required in "$manifest" "$node_lib" "$cxx_lib" "$bash_lib" "$BASH_DIST/licenses/COPYING" "$BASH_DIST/licenses/SOURCE.txt" \
+  "$NODE_DIST/licenses/node-LICENSE.txt" "$NODE_DIST/licenses/libcxx-NOTICE.txt"; do
+  [[ -f "$required" ]] || { echo "missing Android runtime output: $required" >&2; exit 1; }
 done
 
 if [[ -z "$DSH_PACKAGE_DIR" ]]; then
@@ -32,16 +35,24 @@ if [[ -z "$DSH_PACKAGE_DIR" ]]; then
 fi
 
 [[ -f "$DSH_PACKAGE_DIR/lib/bin.js" ]] || { echo "DSH package is missing lib/bin.js: $DSH_PACKAGE_DIR" >&2; exit 1; }
+esbuild_bin="$DSH_PACKAGE_DIR/node_modules/@esbuild/android-arm64/bin/esbuild"
+[[ -f "$esbuild_bin" ]] || { echo "DSH package is missing the Android esbuild executable" >&2; exit 1; }
 
 assets="$ANDROID_DIR/assets/runtime"
 libs="$ANDROID_DIR/jniLibs/arm64-v8a"
 rm -rf "$assets" "$libs" "$WORK_DIR/staged"
 mkdir -p "$assets" "$libs" "$WORK_DIR/staged/runtime"
+mkdir -p "$ANDROID_DIR/assets/licenses/native"
+cp "$NODE_DIST/licenses/node-LICENSE.txt" "$NODE_DIST/licenses/libcxx-NOTICE.txt" \
+  "$ANDROID_DIR/assets/licenses/native/"
 
-cp "$manifest" "$assets/manifest.json"
 cp "$node_lib" "$libs/libdsh_node.so"
 cp "$cxx_lib" "$libs/libc++_shared.so"
-chmod 0755 "$libs/libdsh_node.so"
+cp "$bash_lib" "$libs/libdsh_bash.so"
+# Android 10+ rejects execve() from writable app data. Like Node, esbuild
+# must be extracted by the package manager into nativeLibraryDir.
+cp "$esbuild_bin" "$libs/libdsh_esbuild.so"
+chmod 0755 "$libs/libdsh_node.so" "$libs/libdsh_esbuild.so" "$libs/libdsh_bash.so"
 
 # Keep the wrapper in the runtime root so the service can invoke the manifest
 # entrypoint with a relative path while preserving Node's package resolution.
@@ -56,6 +67,33 @@ cat > "$WORK_DIR/staged/runtime/dsh.cjs" <<'NODE_WRAPPER'
 });
 NODE_WRAPPER
 cp -a "$DSH_PACKAGE_DIR" "$WORK_DIR/staged/runtime/dsh"
+# Keep every runtime entry, type declaration, license and plugin document.
+# JavaScript source maps are optional in DSH's client-module loader; Windows
+# PDBs and Koffi compiler objects are not inputs to the Android runtime.
+node --input-type=module - "$WORK_DIR/staged/runtime/dsh" <<'PRUNE_ANDROID_DEBUG_ARTIFACTS'
+import { readdir, unlink, stat } from "node:fs/promises";
+import { join } from "node:path";
+const root = process.argv[2];
+let count = 0, bytes = 0;
+async function prune(directory, relative = "") {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const name = relative ? `${relative}/${entry.name}` : entry.name;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) await prune(path, name);
+    else if (/\.(?:js|mjs|cjs)\.map$/.test(name) ||
+      /^node_modules\/node-pty\/prebuilds\/win32-(?:x64|arm64)\/.*\.pdb$/.test(name) ||
+      /^node_modules\/koffi\/build\/koffi\/android_arm64\/.*\/CMakeFiles\/.*\.o$/.test(name)) {
+      bytes += (await stat(path)).size;
+      await unlink(path);
+      count++;
+    }
+  }
+}
+await prune(root);
+console.log(`Android runtime: omitted ${count} optional debug/build files (${bytes} bytes)`);
+PRUNE_ANDROID_DEBUG_ARTIFACTS
+mkdir -p "$WORK_DIR/staged/runtime/licenses/bash"
+cp "$BASH_DIST/licenses/COPYING" "$BASH_DIST/licenses/SOURCE.txt" "$WORK_DIR/staged/runtime/licenses/bash/"
 
 (
   cd "$WORK_DIR/staged"
@@ -63,4 +101,18 @@ cp -a "$DSH_PACKAGE_DIR" "$WORK_DIR/staged/runtime/dsh"
 )
 
 unzip -tq "$assets/runtime.zip" >/dev/null
+# Node's version alone is not an installation identity: the DSH package and
+# Android patches can change while Node stays unchanged. Bind the manifest to
+# the exact bundle so upgrades replace a previously extracted runtime.
+node --input-type=module - "$manifest" "$assets/runtime.zip" "$assets/manifest.json" <<'NODE_MANIFEST'
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+const [source, bundle, output] = process.argv.slice(2);
+const metadata = JSON.parse(await readFile(source, "utf8"));
+const hash = createHash("sha256");
+for await (const chunk of createReadStream(bundle)) hash.update(chunk);
+metadata.bundleSha256 = hash.digest("hex");
+await writeFile(output, `${JSON.stringify(metadata, null, 2)}\n`);
+NODE_MANIFEST
 printf 'Staged Android runtime in %s (DSH package %s)\n' "$ANDROID_DIR" "$DSH_PACKAGE_DIR"

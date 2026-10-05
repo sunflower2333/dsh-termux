@@ -1,5 +1,8 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
-    <path android:fillColor="#2463EB" android:pathData="M4,4h40v40h-40z" />
-    <path android:fillColor="#FFFFFF" android:pathData="M12,13l11,11 -11,11 -3,-3 8,-8 -8,-8zM25,31h13v4h-13z" />
-</vector>
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exact official Electron Windows artwork, rather than an Android redraw.
+     deepseek-ai/deepseek-harness@5badb15009ae1756c3afe0ae0cef1faafc290ccc
+     apps/desktop/resources/icon-windows.png (desktop 0.2.1-alpha.1)
+     SHA-256: 12064ff340e65872715cb18e56cfa9d3afe294fed98c81807d39e230a030d972 -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/ic_dsh_desktop"
+    android:gravity="fill" />

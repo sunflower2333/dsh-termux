@@ -14,6 +14,10 @@ manifest.name = "dsh-termux";
 manifest.version = packageVersion;
 manifest.bin = { ...manifest.bin, dsh: "lib/bin.js", "dsh-termux": "lib/bin.js" };
 delete manifest.scripts;
+// npm's production bundling can omit a dependency that is still also listed
+// as a development dependency in the upstream application manifest.
+// Every installed package below belongs to this offline runtime instead.
+delete manifest.devDependencies;
 
 const packageDirectories = [];
 for (const entry of await readdir(join(root, "node_modules"), { withFileTypes: true })) {
