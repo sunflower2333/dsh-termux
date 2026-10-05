@@ -181,7 +181,7 @@
     box-sizing: border-box !important;
     min-width: 0 !important;
     height: 44px !important;
-    padding-top: max(8px, env(safe-area-inset-top, 0px)) !important;
+    padding-top: 0 !important;
     padding-left: max(8px, env(safe-area-inset-left, 0px)) !important;
     padding-right: max(8px, env(safe-area-inset-right, 0px)) !important;
     touch-action: pan-x !important;
@@ -192,14 +192,36 @@
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
     scrollbar-width: none !important;
+    touch-action: pan-x !important;
   }
-  [data-dockkit-tab], dockkit-tab {
-    min-width: 48px !important;
+  /* Desktop tabs overlay a 20px Close control and fade the title underneath
+     it. Reserve the mobile control's full width so its 44px target stays
+     inside the tab and never covers the label. */
+  [data-dockkit-tab][role="tab"], dockkit-tab {
+    box-sizing: border-box !important;
+    min-width: 112px !important;
     min-height: 44px !important;
+    height: 44px !important;
     max-width: 68vw !important;
-    flex: 0 1 auto !important;
+    padding: 0 48px 0 10px !important;
+    flex: 0 0 auto !important;
+  }
+  [data-dockkit-tab][data-dockkit-tab-quiet] {
+    min-width: 80px !important;
+    padding-right: 10px !important;
+  }
+  [data-dockkit-tab-title] {
+    -webkit-mask-image: none !important;
+    mask-image: none !important;
+  }
+  [data-dockkit-tab-close], dockkit-tab-close {
+    top: 0 !important;
+    right: 0 !important;
+    width: 44px !important;
+    height: 44px !important;
   }
   [data-dockkit-strip-chrome], dockkit-strip-chrome {
+    height: 44px !important;
     gap: 4px !important;
     margin-left: 2px !important;
   }
@@ -353,6 +375,7 @@
     [data-dockkit-strip-chrome] > * + *, dockkit-strip-chrome > * + * {
       margin-left: 4px !important;
     }
+    [data-dockkit-tab-title] svg + span { margin-left: 5px !important; }
     .uV2eYG_row > * {
       margin-right: 8px !important;
       margin-bottom: 8px !important;

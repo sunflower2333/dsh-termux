@@ -9,6 +9,7 @@ const TARGET = "chrome83";
 const MARKER = "/* dsh-android-webview83-v1 */";
 const SEGMENTER_MARKER = "/* dsh-android-webview83-intl-segmenter-v1 */";
 const NATIVE_API_MARKER = "/* dsh-android-webview83-native-apis-v1 */";
+const RESOURCE_URL_MARKER = "/* dsh-android-webview83-resource-url-v1 */";
 const HTML_MARKER = "/* dsh-android-webview83-html */";
 const POLYFILL_TAG = '<script data-dsh-android-webview83 src="./assets/dsh-webview83-polyfills.js"></script>';
 const TOOLS = { esbuild: "0.28.2", "core-js-bundle": "3.50.0", "wicg-inert": "3.1.3",
@@ -474,6 +475,36 @@ async function exists(path) {
   try { await access(path); return true; } catch { return false; }
 }
 
+export function patchCoreResourceUrlDetection(source) {
+  // core-js 3.50's native detector checks HTTP URLs but misses WebView 83's
+  // opaque-path parsing of custom schemes. Extend the real detector so its
+  // existing USE_NATIVE_URL gate selects the complete WHATWG URL and matching
+  // URLSearchParams implementations together, including Request/fetch support.
+  // Its URL implementation already binds native Blob URL static methods.
+  const before = `module.exports = !fails(function () {
+  // eslint-disable-next-line unicorn/relative-url-style -- required for testing
+  var url = new URL('b?a=1&b=2&c=3', 'https://a');`;
+  if (source.split(before).length !== 2) {
+    throw new Error("WebView compatibility: unknown core-js 3.50 native URL detector");
+  }
+  const after = `module.exports = !fails(function () {
+  ${RESOURCE_URL_MARKER}
+  var resource = new URL('dsh-resource://file/session/url-probe/a%2Fb.md?q=one+two&tag=1&tag=2#anchor');
+  var subagent = new URL('dsh-resource://subagentchat/session/child%2Fid?parent=parent%2Bid&mode=one-shot');
+  var relative = new URL('next.md?q=ok', 'dsh-resource://file/session/url-probe/base.md');
+  if (resource.protocol !== 'dsh-resource:' || resource.hostname !== 'file' ||
+      resource.pathname !== '/session/url-probe/a%2Fb.md' || resource.hash !== '#anchor' ||
+      resource.searchParams.get('q') !== 'one two' || resource.searchParams.getAll('tag').join(',') !== '1,2' ||
+      subagent.protocol !== 'dsh-resource:' || subagent.hostname !== 'subagentchat' ||
+      subagent.pathname !== '/session/child%2Fid' || subagent.searchParams.get('parent') !== 'parent+id' ||
+      subagent.searchParams.get('mode') !== 'one-shot' ||
+      relative.hostname !== 'file' || relative.pathname !== '/session/url-probe/next.md' ||
+      relative.searchParams.get('q') !== 'ok') return true;
+  // eslint-disable-next-line unicorn/relative-url-style -- required for testing
+  var url = new URL('b?a=1&b=2&c=3', 'https://a');`;
+  return source.replace(before, after);
+}
+
 function patchWeakReferences(source, label) {
   if (!source.includes("new WeakRef(")) return source;
   if (/dsh-web-frontend\/dist\/assets\/index-[^/]+\.js$/.test(label)) {
@@ -701,9 +732,9 @@ export async function patchAndroidWebView(root, toolsDirectory) {
     if (found !== version) throw new Error(`WebView build tools: ${name} must be ${version}, found ${found}`);
   }
   const esbuild = toolRequire("esbuild");
-  const corePath = toolRequire.resolve("core-js-bundle/minified.js");
+  const corePath = toolRequire.resolve("core-js-bundle/index.js");
   const inertPath = toolRequire.resolve("wicg-inert/dist/inert.min.js");
-  const core = await readFile(corePath, "utf8");
+  const core = patchCoreResourceUrlDetection(await readFile(corePath, "utf8"));
   // Stock API30 WebView 83 cannot activate dsh-client-ui-chat without
   // Intl.Segmenter. Its live tool text requires Unicode grapheme boundaries;
   // PDF selection also uses grapheme/word segment records and UTF-16 indices.
@@ -715,7 +746,7 @@ export async function patchAndroidWebView(root, toolsDirectory) {
     legalComments: "inline", minify: true, write: false,
   }).outputFiles[0].text;
   verifyIntlSegmenter(segmenter);
-  const workerPolyfills = esbuild.transformSync(core + "\n" + BROWSER_ADDITIONS,
+  const workerPolyfills = RESOURCE_URL_MARKER + "\n" + esbuild.transformSync(core + "\n" + BROWSER_ADDITIONS,
     { target: TARGET, legalComments: "inline", minify: true }).code;
   const modules = join(root, "node_modules");
   const deepseek = join(modules, "@deepseek-ai");
@@ -780,7 +811,7 @@ export async function patchAndroidWebView(root, toolsDirectory) {
   const polyfill = core + "\n" + segmenter + "\n" +
     (await readFile(inertPath, "utf8")) + "\n" + BROWSER_ADDITIONS + "\n" + ANIMATION_FINISHED_ADDITIONS;
   const compiled = esbuild.transformSync(polyfill, { target: TARGET, legalComments: "inline", minify: true });
-  await writeFile(join(dist, "assets/dsh-webview83-polyfills.js"), `${MARKER}\n${SEGMENTER_MARKER}\n${NATIVE_API_MARKER}\n${compiled.code}`);
+  await writeFile(join(dist, "assets/dsh-webview83-polyfills.js"), `${MARKER}\n${SEGMENTER_MARKER}\n${NATIVE_API_MARKER}\n${RESOURCE_URL_MARKER}\n${compiled.code}`);
   for (const name of ["core-js-bundle", "wicg-inert", "@formatjs/intl-segmenter",
     "@formatjs/intl-localematcher", "@formatjs/fast-memoize"]) {
     const packagePath = join(resolve(toolsDirectory), "node_modules", name);

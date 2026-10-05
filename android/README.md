@@ -73,14 +73,17 @@ The default workspace lives under the app-private Documents directory.
 
 The browser bundles target Android 11's WebView 83. Pinned compatibility
 libraries load before DSH's bootstrap, with their licenses included in the
-runtime. Newer WebViews keep their native implementations. File inputs use
+runtime. Its URL feature check covers DSH resource addresses, so old WebViews
+use complete URL and URLSearchParams implementations for file previews and
+subagent links. Newer WebViews keep their native implementations. File inputs use
 Android's system document picker. Session exports use Android's Save As picker
 and retain DSH's local authentication without forwarding it through redirects.
 Rotation preserves the existing WebView and pending picker callbacks.
 When the keyboard leaves a short viewport, the chat header and composer use a
 compact layout while keeping Chat, Trajectory and the workspace panel available.
 Attachment menus fit inside the actual conversation area and scroll their
-remaining options.
+remaining options. Pane tabs reserve space for their 44px Close buttons and
+support horizontal touch scrolling when several tabs are open.
 
 Android 11 does not provide DSH's desktop Bash sandbox. The default workspace
 policy remains enabled; a Bash command that requires unsandboxed execution
