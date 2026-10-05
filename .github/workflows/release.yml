@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       build: ${{ steps.version.outputs.build }}
       upstream: ${{ steps.version.outputs.upstream }}
@@ -79,7 +79,7 @@ jobs:
   build:
     needs: check
     if: needs.check.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -110,7 +110,7 @@ jobs:
   release:
     needs: [check, build]
     if: github.event_name != 'push' && needs.check.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
