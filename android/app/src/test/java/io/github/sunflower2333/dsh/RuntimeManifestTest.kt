@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,6 +22,21 @@ class RuntimeManifestTest {
     @Test fun keepsTheDshBrowserTokenInTheReadyUrl() {
         val line = "dsh web: http://127.0.0.1:4312/?token=one-time-token"
         assertTrue(DshService.extractReadyUrl(line)!!.contains("?token=one-time-token"))
+    }
+
+    @Test fun classifiesInternalAndExternalNavigation() {
+        assertEquals(
+            WebNavigationDecision.INTERNAL,
+            WebNavigation.classify("http://127.0.0.1:4312/ui/index.html"),
+        )
+        assertEquals(
+            WebNavigationDecision.EXTERNAL_HTTP,
+            WebNavigation.classify("https://example.com/docs"),
+        )
+        assertEquals(
+            WebNavigationDecision.BLOCKED,
+            WebNavigation.classify("intent://settings#Intent;scheme=app;end"),
+        )
     }
 
     @Test fun rejectsZipTraversal() {

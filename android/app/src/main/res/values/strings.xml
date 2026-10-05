@@ -11,5 +11,6 @@
     <string name="error_status">错误：%1$s</string>
     <string name="exited_status">DeepSeek Harness 进程已退出</string>
     <string name="web_load_error">DSH 页面加载失败</string>
+    <string name="external_browser_unavailable">没有可用的浏览器打开此链接</string>
     <string name="retry">重试</string>
 </resources>

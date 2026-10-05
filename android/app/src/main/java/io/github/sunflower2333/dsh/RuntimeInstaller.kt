@@ -17,13 +17,16 @@ object RuntimeInstaller {
     fun ensureInstalled(context: Context, manifest: RuntimeManifest): File {
         val root = File(context.filesDir, "dsh-runtime/${manifest.version}")
         val marker = File(root, ".installed")
-        if (!marker.isFile || !File(root, manifest.entrypoint).isFile) {
+        if (!marker.isFile || marker.readText() != manifest.version || !File(root, manifest.entrypoint).isFile) {
             root.deleteRecursively()
             root.mkdirs()
             context.assets.open(ZIP_ASSET).use { unzipSafely(it, root) }
             check(File(root, manifest.entrypoint).isFile) { "runtime entrypoint missing after install" }
             marker.writeText(manifest.version)
         }
+        // ZipInputStream does not restore Unix mode bits. Run this on every
+        // launch so an upgrade from an older APK also repairs existing files.
+        markRuntimeExecutables(root)
         return root
     }
 
@@ -51,5 +54,15 @@ object RuntimeInstaller {
                 zip.closeEntry()
             }
         }
+    }
+
+    private fun markRuntimeExecutables(root: File) {
+        root.walkTopDown()
+            .filter { it.isFile && it.parentFile?.name == "bin" }
+            .forEach { file ->
+                check(file.setExecutable(true, false)) {
+                    "unable to make runtime tool executable: ${file.relativeTo(root)}"
+                }
+            }
     }
 }
