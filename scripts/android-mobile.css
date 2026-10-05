@@ -4,6 +4,12 @@
 .fortune-container .luckysheet-sheet-area {
   transition-property: color, background-color, border-color !important;
 }
+/* WebView 83 cannot enumerate CSS transitions. RightbarSeat marks only its
+   real panel in that engine and reports coverage after these transitions are
+   canceled. Keyframe and native Web Animations remain intact. */
+[data-dsh-sidebar-instant], [data-dsh-sidebar-instant] * {
+  transition: none !important;
+}
 @media screen and (max-width: 600px), screen and (pointer: coarse) and (max-width: 900px) {
   html, body, #root {
     width: 100% !important;

@@ -526,6 +526,25 @@ function quotedWorker(source, name = "_dsh_pdf_worker_default") {
 }
 
 function patchBrowserCases(source, label, esbuild, workerPolyfills) {
+  if (/dsh-client-ui-sidebar-right\/lib\/client\.js$/.test(label) &&
+      !source.includes('"data-dsh-sidebar-instant"')) {
+    const before = 'const entering = shown && fullscreen ? panelRef.current.getAnimations({ subtree: true })';
+    if (source.split(before).length !== 2) {
+      throw new Error("WebView compatibility: unknown fullscreen sidebar transition reporter");
+    }
+    // Stock WebView 83 renders CSS transitions but cannot enumerate them.
+    // Do not pretend to implement getAnimations: explicitly cancel transitions
+    // for this panel/subtree before reporting instantaneous coverage. Updated
+    // WebViews keep their native enumeration and finished-promise wait.
+    const after = `const sidebarAnimationsAvailable = panelRef.current !== null &&
+            typeof panelRef.current.getAnimations === "function";
+          if (panelRef.current !== null) {
+            if (sidebarAnimationsAvailable) panelRef.current.removeAttribute("data-dsh-sidebar-instant");
+            else panelRef.current.setAttribute("data-dsh-sidebar-instant", "");
+          }
+          const entering = shown && fullscreen && sidebarAnimationsAvailable ? panelRef.current.getAnimations({ subtree: true })`;
+    source = source.replace(before, after);
+  }
   if (/dsh-client-ui-chat\/lib\/client\.js$/.test(label) &&
       !source.includes("globalThis.__DSH_ANDROID_VISIBLE_QUERY__")) {
     let count = 0;
@@ -662,6 +681,18 @@ function verifyIntlSegmenter(polyfill) {
 }
 
 export async function patchAndroidWebView(root, toolsDirectory) {
+  // The guarded reporter can skip waiting only when this real stylesheet
+  // cancels the panel's CSS transitions. Fail closed on an outdated mobile
+  // layer rather than silently reporting coverage during a moving transition.
+  const frontend = join(root, "node_modules/@deepseek-ai/dsh-web-frontend/dist");
+  const frontendIndex = await readFile(join(frontend, "index.html"), "utf8");
+  const styleLinks = [...frontendIndex.matchAll(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/g)]
+    .map(match => match[1]).filter(href => /(?:^|\/)index-[^/]+\.css$/.test(href));
+  if (styleLinks.length !== 1) throw new Error("WebView compatibility: unknown sidebar fallback stylesheet");
+  const frontendCss = await readFile(join(frontend, styleLinks[0]), "utf8");
+  if (!/\[data-dsh-sidebar-instant\],\s*\[data-dsh-sidebar-instant\]\s*\*\s*\{\s*transition:\s*none\s*!important\s*;\s*\}/.test(frontendCss)) {
+    throw new Error("WebView compatibility: apply the current Android mobile stylesheet before patching sidebar transitions");
+  }
   const toolRequire = createRequire(join(resolve(toolsDirectory), "package.json"));
   for (const [name, version] of Object.entries(TOOLS)) {
     // FormatJS intentionally does not export package.json. Read metadata from
