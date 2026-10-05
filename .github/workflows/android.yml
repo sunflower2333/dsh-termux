@@ -20,7 +20,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    # Two ubuntu-24.04 runs failed before receiving a hosted runner. Try the
+    # supported 22.04 image; select GCC 12 for Node 24's host-side generators.
+    runs-on: ubuntu-22.04
     timeout-minutes: 240
     env:
       NODE_VERSION: 24.18.0
@@ -67,7 +69,7 @@ jobs:
       - name: Install native build tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes cmake ninja-build
+          sudo apt-get install --yes cmake ninja-build gcc-12 g++-12
 
       - name: Build the real DSH Termux package
         shell: bash
@@ -79,6 +81,8 @@ jobs:
         shell: bash
         env:
           JOBS: 4
+          CC_host: gcc-12
+          CXX_host: g++-12
         run: |
           set -euo pipefail
           bash scripts/build-android-node.sh
