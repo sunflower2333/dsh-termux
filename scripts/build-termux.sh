@@ -45,7 +45,7 @@ find_lock_version() {
 }
 
 npm install --prefix "$BUILD_ROOT" --ignore-scripts --include=optional --os=android --cpu=arm64
-ESBUILD_VERSION="$(npm view @esbuild/android-arm64 version)"
+ESBUILD_VERSION="${ANDROID_ESBUILD_VERSION:-$(npm view @esbuild/android-arm64 version)}"
 SHARP_VERSION="$(find_lock_version sharp)"
 npm install --prefix "$BUILD_ROOT/tools" --ignore-scripts \
   "node-gyp@12.4.0" "esbuild@0.28.2" "core-js-bundle@3.50.0" "wicg-inert@3.1.3" \

@@ -85,6 +85,17 @@ Attachment menus fit inside the actual conversation area and scroll their
 remaining options. Pane tabs reserve space for their 44px Close buttons and
 support horizontal touch scrolling when several tabs are open.
 
+Document previews also adapt to WebView 83's CSS support. Image and PDF zoom
+controls use physical positioning when logical insets are unavailable. PDF text
+layers preserve selectable glyph positions using supported dimensions and
+transforms. Excel's stylesheet uses selectors scoped to its preview container
+when native CSS `@scope` is unavailable; newer WebViews retain native scoping.
+Excel waits for its Worker to finish initialization before sending the workbook
+and starting the existing parse deadline. Initialization has a separate bounded
+deadline, and success, errors or cancellation release the Worker and Blob URL.
+Workbooks that omit an optional default row height use a visible 20px default;
+explicit row heights and hidden rows remain unchanged.
+
 Android 11 does not provide DSH's desktop Bash sandbox. The default workspace
 policy remains enabled; a Bash command that requires unsandboxed execution
 must request DSH's existing single-command approval. The app does not silently
@@ -125,6 +136,8 @@ For a GitHub build, open a successful **Build DSH Android** run from the
 `android` branch and download its `dsh-android-<run number>` artifact from the
 Artifacts section. GitHub requires a signed-in account for artifact downloads.
 Unzip the artifact to obtain the signed APK and its SHA-256 file.
+The Android workflow defaults to the verified DSH `0.2.0-rc.2` and esbuild
+`0.28.2`; its manual version input can select another upstream DSH release.
 CI currently generates a fresh testing signing key for each run. To install an
 APK from a different run, export any needed sessions and uninstall the previous
 CI build first; Android does not allow updates signed by a different key.

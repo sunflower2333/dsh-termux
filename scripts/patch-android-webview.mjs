@@ -2,6 +2,7 @@
 import { readFile, writeFile, readdir, access, copyFile } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import { fileURLToPath } from "node:url";
 
@@ -505,6 +506,395 @@ export function patchCoreResourceUrlDetection(source) {
   return source.replace(before, after);
 }
 
+export function patchPdfTextRenderer(source, esbuild) {
+  const before = `function pdfTextRenderer(host) {
+    return (page, viewport) => {
+      const layer = new TextLayerBuilder({ pdfPage: page });
+      const container = layer.div;
+      container.style.setProperty("--total-scale-factor", String(viewport.scale * viewport.userUnit));
+      container.style.setProperty("--scale-round-x", "1px");
+      container.style.setProperty("--scale-round-y", "1px");
+      host.append(container);
+      const resize = () => {
+        container.style.scale = String(host.getBoundingClientRect().width / viewport.width);
+      };
+      const observer = new ResizeObserver(resize);
+      observer.observe(host);
+      resize();
+      return {
+        promise: layer.render({ viewport }),
+        cancel() {
+          observer.disconnect();
+          layer.cancel();
+          container.remove();
+        }
+      };
+    };
+  }`;
+  const after = `function pdfTextRenderer(host) {
+    return (page, viewport) => {
+      const layer = new TextLayerBuilder({ pdfPage: page });
+      const container = layer.div;
+      container.style.setProperty("--total-scale-factor", String(viewport.scale * viewport.userUnit));
+      container.style.setProperty("--scale-round-x", "1px");
+      container.style.setProperty("--scale-round-y", "1px");
+      const dshAndroidPdfTextScale = typeof CSS !== "undefined" && CSS.supports("scale", "1");
+      const dshAndroidPdfTextDimensions = typeof CSS !== "undefined" && CSS.supports("width", "round(down, 1px, 1px)");
+      host.append(container);
+      const resize = () => {
+        const ratio = host.getBoundingClientRect().width / viewport.width;
+        if (dshAndroidPdfTextScale) container.style.scale = String(ratio);
+        else {
+          const rotation = (viewport.rotation % 360 + 360) % 360;
+          const rotated = rotation === 90 ? " rotate(90deg) translateY(-100%)" :
+            rotation === 180 ? " rotate(180deg) translate(-100%, -100%)" :
+            rotation === 270 ? " rotate(270deg) translate(-100%)" : "";
+          container.style.transformOrigin = "0 0";
+          container.style.transform = "scale(" + ratio + ")" + rotated;
+        }
+        if (!dshAndroidPdfTextDimensions) {
+          const totalScale = viewport.scale * viewport.userUnit;
+          container.style.width = Math.floor(viewport.rawDims.pageWidth * totalScale) + "px";
+          container.style.height = Math.floor(viewport.rawDims.pageHeight * totalScale) + "px";
+        }
+      };
+      const observer = new ResizeObserver(resize);
+      observer.observe(host);
+      resize();
+      const promise = layer.render({ viewport });
+      // TextLayer construction writes its round() dimensions synchronously.
+      // Restore only unsupported layout properties after that real render call.
+      if (!dshAndroidPdfTextScale || !dshAndroidPdfTextDimensions) resize();
+      return {
+        promise,
+        cancel() {
+          observer.disconnect();
+          layer.cancel();
+          container.remove();
+        }
+      };
+    };
+  }`;
+  const normalize = value => value.replace(/\s+/g, "");
+  const matches = [...source.matchAll(/function pdfTextRenderer\(host\) \{[\s\S]*?\n[\t ]*\};\n[\t ]*\};\n[\t ]*\}/g)];
+  if (matches.length !== 1) throw new Error("WebView compatibility: unknown PDF text renderer boundary");
+  const renderer = matches[0][0];
+  // Support official source and this helper's already lowered source. A fresh
+  // build and a repeated local build must receive exactly the same renderer.
+  const normalized = normalize(renderer);
+  const lowered = esbuild.transformSync(after, { target: TARGET, legalComments: "inline", minify: false }).code;
+  if (normalized === normalize(after) || normalized === normalize(lowered)) return source;
+  if (normalized !== normalize(before)) throw new Error("WebView compatibility: unknown PDF text renderer layout");
+  return source.slice(0, matches[0].index) + after + source.slice(matches[0].index + renderer.length);
+}
+
+export function patchExcelWorkerBootstrap(source, esbuild) {
+  const before = `function parseExcel(bytes, format, limits, signal) {
+    signal.throwIfAborted();
+    if (bytes.byteLength > limits.maxBytes) return Promise.reject(/* @__PURE__ */ new Error("tooLarge"));
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(new Blob([_dsh_excel_worker_source_default], { type: "text/javascript" }));
+      let worker;
+      try {
+        worker = new Worker(url, { name: "dsh-excel" });
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        reject(new Error("invalid", { cause: error }));
+        return;
+      }
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.onmessageerror = null;
+        worker.terminate();
+        URL.revokeObjectURL(url);
+      };
+      const abort = () => {
+        finish();
+        reject(new DOMException("Excel preview closed", "AbortError"));
+      };
+      const fail = () => {
+        finish();
+        reject(/* @__PURE__ */ new Error("invalid"));
+      };
+      const timer = setTimeout(() => {
+        finish();
+        reject(/* @__PURE__ */ new Error("timeout"));
+      }, limits.timeoutMs);
+      worker.onerror = fail;
+      worker.onmessageerror = fail;
+      worker.onmessage = (event) => {
+        const message = event.data;
+        if (typeof message !== "object" || message === null || !("ok" in message)) {
+          fail();
+          return;
+        }
+        if (message.ok === true && "value" in message && validPreview(message.value)) {
+          finish();
+          resolve(message.value);
+        } else if (message.ok === false && "code" in message && [
+          "invalid", "tooLarge", "timeout", "encoding"
+        ].includes(String(message.code))) {
+          finish();
+          reject(new Error(String(message.code)));
+        } else fail();
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      try {
+        const copy = bytes.slice();
+        worker.postMessage({ bytes: copy, format, limits }, [copy.buffer]);
+      } catch (error) {
+        finish();
+        reject(new Error("invalid", { cause: error }));
+      }
+    });
+  }`;
+  const after = `function parseExcel(bytes, format, limits, signal) {
+    signal.throwIfAborted();
+    if (bytes.byteLength > limits.maxBytes) return Promise.reject(/* @__PURE__ */ new Error("tooLarge"));
+    return new Promise((resolve, reject) => {
+      // The business bundle remains unchanged. Only acknowledge readiness
+      // after its real message handler has been installed. A new line and
+      // semicolon also separate this fragment from any final source-map comment.
+      const dshAndroidExcelWorkerBootstrap = "\\n;/* dsh-android-excel-worker-ready-v1 */\\nif (typeof globalThis.onmessage !== 'function') throw new Error('Excel Worker handler unavailable');\\nglobalThis.postMessage({type:'dsh-excel-worker-ready',version:1});\\n";
+      let url, worker, initTimer, parseTimer;
+      let settled = false;
+      let phase = "initializing";
+      let timingMark;
+      const startTiming = () => {
+        try {
+          if (typeof performance === "undefined" || !["now", "mark", "measure", "clearMarks", "clearMeasures"]
+              .every(name => typeof performance[name] === "function")) return;
+          timingMark = "dsh-excel-worker-" + phase + "-" + performance.now() + "-" + Math.random();
+          performance.mark(timingMark);
+        } catch (_) { timingMark = undefined; }
+      };
+      const finishTiming = () => {
+        if (timingMark === undefined) return;
+        const start = timingMark, end = start + "-end";
+        timingMark = undefined;
+        try {
+          performance.mark(end);
+          // Keep only the latest numeric measurement for each of our phases;
+          // never clear another module's Performance entries.
+          const name = "dsh-excel-worker-" + phase;
+          performance.clearMeasures(name);
+          performance.measure(name, start, end);
+        } catch (_) {
+          // Diagnostics cannot affect worker behavior on partial Performance APIs.
+        } finally {
+          try { performance.clearMarks(start); performance.clearMarks(end); } catch (_) {}
+        }
+      };
+      const finish = () => {
+        if (settled) return false;
+        settled = true;
+        finishTiming();
+        clearTimeout(initTimer);
+        clearTimeout(parseTimer);
+        signal.removeEventListener("abort", abort);
+        if (worker) {
+          worker.onmessage = null;
+          worker.onerror = null;
+          worker.onmessageerror = null;
+          worker.terminate();
+        }
+        if (url !== undefined) URL.revokeObjectURL(url);
+        return true;
+      };
+      const fail = (code = "invalid", cause) => {
+        const error = new Error(code, { cause });
+        error.phase = phase;
+        if (finish()) reject(error);
+      };
+      const abort = () => {
+        if (finish()) reject(new DOMException("Excel preview closed", "AbortError"));
+      };
+      // Bootstrap has its own bounded budget. The original parse budget only
+      // begins once the worker is ready to receive the real transferred bytes.
+      startTiming();
+      initTimer = setTimeout(() => fail("timeout", new Error("Excel Worker initialization timed out")), 60000);
+      try {
+        url = URL.createObjectURL(new Blob([_dsh_excel_worker_source_default, dshAndroidExcelWorkerBootstrap], { type: "text/javascript" }));
+        worker = new Worker(url, { name: "dsh-excel" });
+      } catch (error) {
+        fail("invalid", error);
+        return;
+      }
+      worker.onerror = (event) => fail("invalid", new Error("Excel Worker " + phase + " failed", { cause: event.error }));
+      worker.onmessageerror = () => fail("invalid", new Error("Excel Worker " + phase + " message could not be decoded"));
+      worker.onmessage = (event) => {
+        if (settled) return;
+        const message = event.data;
+        if (typeof message !== "object" || message === null || Object.keys(message).length !== 2) {
+          fail();
+          return;
+        }
+        if (phase === "initializing") {
+          if (message.type !== "dsh-excel-worker-ready" || message.version !== 1) {
+            fail();
+            return;
+          }
+          clearTimeout(initTimer);
+          initTimer = undefined;
+          finishTiming();
+          phase = "parsing";
+          startTiming();
+          parseTimer = setTimeout(() => fail("timeout", new Error("Excel Worker parsing timed out")), limits.timeoutMs);
+          try {
+            const copy = bytes.slice();
+            worker.postMessage({ bytes: copy, format, limits }, [copy.buffer]);
+          } catch (error) { fail("invalid", error); }
+          return;
+        }
+        if (message.ok === true && "value" in message && validPreview(message.value)) {
+          if (finish()) resolve(message.value);
+        } else if (message.ok === false && "code" in message && [
+          "invalid", "tooLarge", "timeout", "encoding"
+        ].includes(String(message.code))) {
+          fail(String(message.code));
+        } else fail();
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      // Abort may occur while the native constructor is returning, before
+      // registration above. Do not leave that operation waiting for ready.
+      if (signal.aborted) abort();
+    });
+  }`;
+  const matches = [...source.matchAll(/function parseExcel\(bytes, format, limits, signal\) \{[\s\S]*?(?=\n[\t ]*function validPreview\()/g)];
+  if (matches.length !== 1 || [...source.matchAll(/\bfunction parseExcel\(/g)].length !== 1) {
+    throw new Error("WebView compatibility: unknown Excel parser boundary");
+  }
+  // The outer official/lowered bundle gives these two locals different names.
+  // Ignore only those audited aliases and whitespace, not upstream behavior.
+  const normalize = value => esbuild.transformSync(value, { target: TARGET, legalComments: "inline", minifyWhitespace: true }).code
+    .replace(/\berror2\b/g, "error").replace(/\bcopy2\b/g, "copy");
+  const parser = matches[0][0];
+  const normalized = normalize(parser);
+  if (normalized === normalize(after)) return source;
+  if (normalized !== normalize(before)) throw new Error("WebView compatibility: unknown Excel worker lifecycle");
+  return source.slice(0, matches[0].index) + after + source.slice(matches[0].index + parser.length);
+}
+
+export function patchExcelDefaultRowHeight(source, esbuild) {
+  const declaration = `function dshAndroidExcelWorksheetRows(sheets, format) {
+    if (format !== "xlsx") return sheets;
+    let changed = false;
+    const normalized = sheets.map((sheet) => {
+      const height = sheet.defaultRowHeight;
+      if (height !== undefined && !(typeof height === "number" && !Number.isFinite(height))) return sheet;
+      changed = true;
+      // ExcelJS normally initializes worksheets to 15 points. Loading an XLSX
+      // without the optional sheetFormatPr replaces those properties with {},
+      // so upstream conversion emits NaN instead of a usable pixel height.
+      // Keep finite heights (including explicit zero), custom rows and hiding.
+      return { ...sheet, defaultRowHeight: 15 * 96 / 72 };
+    });
+    return changed ? normalized : sheets;
+  }`;
+  const memo = `const dshAndroidExcelSheets = (0, react.useMemo)(() =>
+    state && "value" in state ? dshAndroidExcelWorksheetRows(state.value.sheets, format) : undefined,
+    [state, format]);`;
+  const ref = "const workbookRef = (0, react.useRef)(null);";
+  const originalData = "data: state.value.sheets,";
+  const normalizedData = "data: dshAndroidExcelSheets,";
+  const normalize = value => esbuild.transformSync(value, { target: TARGET, legalComments: "inline" }).code;
+  const body = [...source.matchAll(/\bfunction ExcelBody\(/g)];
+  if (body.length !== 1 || source.split(ref).length !== 2) {
+    throw new Error("WebView compatibility: unknown Excel default row-height boundary");
+  }
+  if (source.includes("dshAndroidExcelWorksheetRows") || source.includes("dshAndroidExcelSheets")) {
+    if ([...source.matchAll(/\bfunction dshAndroidExcelWorksheetRows\(/g)].length !== 1) {
+      throw new Error("WebView compatibility: duplicate Excel default row-height fallback");
+    }
+    const declarations = [...source.matchAll(/function dshAndroidExcelWorksheetRows\(sheets, format\) \{[\s\S]*?\}(?=\s*function ExcelBody\()/g)];
+    const memos = [...source.matchAll(/const dshAndroidExcelSheets\s*=[\s\S]*?;/g)];
+    if (declarations.length !== 1 || memos.length !== 1 ||
+        normalize(declarations[0][0]) !== normalize(declaration) || normalize(memos[0][0]) !== normalize(memo) ||
+        source.includes(originalData) || source.split(normalizedData).length !== 2) {
+      throw new Error("WebView compatibility: unknown existing Excel default row-height fallback");
+    }
+    return source;
+  }
+  if (source.split(originalData).length !== 2 || source.includes(normalizedData)) {
+    throw new Error("WebView compatibility: unknown Excel workbook data property");
+  }
+  source = source.slice(0, body[0].index) + declaration + "\n" + source.slice(body[0].index);
+  return source.replace(ref, ref + "\n" + memo).replace(originalData, normalizedData);
+}
+
+export function prefixExcelStylesheet(css) {
+  // This pinned Fortune stylesheet contains only qualified rules. Do not
+  // silently reinterpret future nested CSS, @rules or changed selector syntax.
+  if (Buffer.byteLength(css) !== 49984 ||
+      createHash("sha256").update(css).digest("hex") !== "121488ced1e2e3b62b986ec0b56105f870dc8eb162650a0375bc208281adb6a7") {
+    throw new Error("WebView compatibility: unknown Fortune scoped stylesheet");
+  }
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  if (rules.length !== 449 || rules.map(rule => rule[0]).join("") !== css || css.includes("@")) {
+    throw new Error("WebView compatibility: unsupported Fortune scoped rule");
+  }
+  return rules.map(([, selector, declarations]) => {
+    const selectors = [];
+    let start = 0, parentheses = 0, brackets = 0, quote = "";
+    for (let at = 0; at < selector.length; at++) {
+      const token = selector[at];
+      if (token === "\\") { at++; continue; }
+      if (quote) { if (token === quote) quote = ""; continue; }
+      if (token === '"' || token === "'") { quote = token; continue; }
+      if (token === "(") parentheses++;
+      else if (token === ")") parentheses--;
+      else if (token === "[") brackets++;
+      else if (token === "]") brackets--;
+      else if (token === "," && parentheses === 0 && brackets === 0) {
+        selectors.push(selector.slice(start, at).trim()); start = at + 1;
+      }
+      if (parentheses < 0 || brackets < 0) throw new Error("WebView compatibility: unbalanced Fortune selector");
+    }
+    selectors.push(selector.slice(start).trim());
+    if (quote || parentheses || brackets || selectors.some(value => !value)) {
+      throw new Error("WebView compatibility: unknown Fortune selector boundary");
+    }
+    return selectors.map(value => "[data-excel-preview] " + value).join(",") + "{" + declarations + "}";
+  }).join("");
+}
+
+export function patchExcelScopedStyles(source, esbuild) {
+  if ([...source.matchAll(/\b(?:var|const) index_css_default\s*=/g)].length !== 1) {
+    throw new Error("WebView compatibility: unknown Fortune stylesheet definition");
+  }
+  const stylesheet = quotedWorker(source, "index_css_default").value;
+  const prefixed = prefixExcelStylesheet(stylesheet);
+  const before = 'const scopedStyles = `@scope ([data-excel-preview]) { ${index_css_default} }`;';
+  const after = `const dshAndroidExcelScopedStyles = ${JSON.stringify(prefixed)};
+    const dshAndroidExcelNativeScope = (() => {
+      try {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("@scope ([data-excel-preview]) { .fortune-container { display: block; } }");
+        return typeof CSSScopeRule === "function" && sheet.cssRules.length === 1 &&
+          sheet.cssRules[0] instanceof CSSScopeRule && sheet.cssRules[0].cssRules.length === 1 &&
+          sheet.cssRules[0].cssRules[0].style.display === "block";
+      } catch (_) { return false; }
+    })();
+    const scopedStyles = dshAndroidExcelNativeScope ? \`@scope ([data-excel-preview]) { \${index_css_default} }\` : dshAndroidExcelScopedStyles;`;
+  const normalize = value => value.replace(/\s+/g, "");
+  if (source.includes("dshAndroidExcelScopedStyles")) {
+    const patched = [...source.matchAll(/const dshAndroidExcelScopedStyles\s*=[\s\S]*?\n[\t ]*const scopedStyles\s*=[\s\S]*?;/g)];
+    if (patched.length !== 1 ||
+        esbuild.transformSync(patched[0][0], { target: TARGET }).code !== esbuild.transformSync(after, { target: TARGET }).code) {
+      throw new Error("WebView compatibility: unknown existing Fortune scope fallback");
+    }
+    return source;
+  }
+  const matches = [...source.matchAll(/const scopedStyles\s*=[\s\S]*?;/g)];
+  if (matches.length !== 1 || normalize(matches[0][0]) !== normalize(before)) {
+    throw new Error("WebView compatibility: unknown Fortune scope wrapper");
+  }
+  return source.slice(0, matches[0].index) + after + source.slice(matches[0].index + matches[0][0].length);
+}
+
 function patchWeakReferences(source, label) {
   if (!source.includes("new WeakRef(")) return source;
   if (/dsh-web-frontend\/dist\/assets\/index-[^/]+\.js$/.test(label)) {
@@ -598,6 +988,9 @@ function patchBrowserCases(source, label, esbuild, workerPolyfills) {
       }`);
   }
   if (/dsh-client-ui-sidebar-documentpreview\/lib\/client\.excel\.js$/.test(label)) {
+    source = patchExcelWorkerBootstrap(source, esbuild);
+    source = patchExcelDefaultRowHeight(source, esbuild);
+    source = patchExcelScopedStyles(source, esbuild);
     const worker = quotedWorker(source, "_dsh_excel_worker_source_default");
     const workerMarker = "/* dsh-android-webview83-excel-worker-v1 */";
     const workerBodyMarker = "/* dsh-android-webview83-excel-worker-body */";
@@ -618,6 +1011,7 @@ function patchBrowserCases(source, label, esbuild, workerPolyfills) {
     }
   }
   if (/dsh-client-ui-sidebar-documentpreview\/lib\/client\.pdf\.js$/.test(label)) {
+    source = patchPdfTextRenderer(source, esbuild);
     if (source.includes("adoptedStyleSheets.push(styleSheet);")) {
       if (source.split("adoptedStyleSheets.push(styleSheet);").length !== 2) throw new Error("WebView compatibility: unknown PDF font stylesheet");
       source = source.replace("adoptedStyleSheets.push(styleSheet);",
