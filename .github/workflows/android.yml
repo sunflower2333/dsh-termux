@@ -47,7 +47,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
@@ -128,7 +128,7 @@ jobs:
           sha256sum "$signed" > "$signed.sha256"
 
       - name: Upload installable APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dsh-android-${{ github.run_number }}
           path: |
