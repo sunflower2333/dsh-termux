@@ -21,6 +21,8 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.URLUtil
@@ -54,6 +56,8 @@ class MainActivity : Activity() {
     private var downloadPageReady = false
     private val downloads by lazy { AndroidDownloads(this) }
     private var uiCheckGeneration = 0
+    private var backNavigationPending = false
+    private var pendingConfigurationExport = false
     private val webDiagnostics by lazy { StartupDiagnostics(File(cacheDir, "dsh-webview.log")) }
     // Keep the callback behind an Any-typed slot: OnBackInvokedCallback was
     // introduced in API 33 while this client still supports API 30.
@@ -100,6 +104,10 @@ class MainActivity : Activity() {
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
         )
         setContentView(buildView())
+        // API 30's PhoneWindow.insetsController dereferences the DecorView.
+        // setContentView installs it before we configure the controller; the
+        // root's posted inset request runs after this edge-to-edge setup.
+        configureSystemBars()
         restoreWebState(savedInstanceState)
         restoreFileOperations(savedInstanceState)
         savedInstanceState?.getString(STATE_ERROR)?.let { showError(it) }
@@ -137,7 +145,19 @@ class MainActivity : Activity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildView(): View {
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.TRANSPARENT) }
+        val root = FrameLayout(this).apply {
+            // Keep the official window launch logo visible until DSH mounts.
+            setBackgroundColor(Color.TRANSPARENT)
+            // Android 15 enforces edge-to-edge for target 35. Own the insets on
+            // every supported API so neither old decor fitting nor a cutout
+            // can put a toolbar underneath the system status/navigation bars.
+            setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                val keyboard = insets.getInsets(WindowInsets.Type.ime())
+                view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+                insets
+            }
+        }
         webView = WebView(this).apply {
             visibility = View.INVISIBLE
             settings.javaScriptEnabled = true
@@ -186,6 +206,11 @@ class MainActivity : Activity() {
                         ByteArrayInputStream(ByteArray(0)))
                 }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (request.isForMainFrame && WebNavigation.isConfigurationRequest(
+                            request.url.toString(), view.url, lastReadyLaunchUrl)) {
+                        openConfigurationDocument()
+                        return true
+                    }
                     return when (WebNavigation.classify(request.url.toString(), lastReadyLaunchUrl)) {
                         WebNavigationDecision.INTERNAL -> false
                         WebNavigationDecision.EXTERNAL_HTTP -> {
@@ -226,7 +251,21 @@ class MainActivity : Activity() {
             setOnClickListener { showErrorDetails() }
         }
         root.addView(errorBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        root.post { root.requestApplyInsets() }
         return root
+    }
+
+    @Suppress("DEPRECATION")
+    private fun configureSystemBars() {
+        window.setDecorFitsSystemWindows(false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        window.isStatusBarContrastEnforced = false
+        window.isNavigationBarContrastEnforced = false
+        window.insetsController?.setSystemBarsAppearance(
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+        )
     }
 
     /** Reveal the real application, after its own plugin boot DOM has gone away. */
@@ -269,6 +308,7 @@ class MainActivity : Activity() {
 
     private fun restoreFileOperations(savedInstanceState: Bundle?) {
         if (savedInstanceState == null) return
+        pendingConfigurationExport = savedInstanceState.getBoolean(STATE_CONFIGURATION_EXPORT)
         savedInstanceState.getBundle(STATE_PENDING_DOWNLOAD)?.let { state ->
             val url = state.getString("url")?.takeIf { LocalUrl.isAllowed(it) }
             if (url != null) {
@@ -287,6 +327,14 @@ class MainActivity : Activity() {
     @Deprecated("Activity result compatibility for the native WebView file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == CONFIGURATION_EXPORT_REQUEST) {
+            val expected = pendingConfigurationExport
+            pendingConfigurationExport = false
+            if (resultCode == RESULT_OK && expected) {
+                data?.data?.takeIf { it.scheme == "content" }?.let { saveConfigurationCopy(it) }
+            }
+            return
+        }
         if (requestCode == DOWNLOAD_DESTINATION_REQUEST) {
             if (resultCode != RESULT_OK) {
                 pendingDownload = null
@@ -388,6 +436,76 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun openConfigurationDocument() {
+        val uri = ConfigurationDocumentProvider.uri(this)
+        try {
+            // Prove that the provider-owned document exists before launching
+            // an editor. The frontend has already prepared it through DSH.
+            contentResolver.openFileDescriptor(uri, "r")?.use { }
+                ?: throw java.io.FileNotFoundException("Configuration unavailable")
+            for (action in listOf(Intent.ACTION_EDIT, Intent.ACTION_VIEW)) {
+                val intent = Intent(action).apply {
+                    setDataAndType(uri, "text/plain")
+                    clipData = ClipData.newRawUri(ConfigurationDocumentPolicy.FILENAME, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    if (action == Intent.ACTION_EDIT) addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                }
+                if (intent.resolveActivity(packageManager) == null) continue
+                try {
+                    startActivity(Intent.createChooser(intent, getString(R.string.configuration_open_with)))
+                    return
+                } catch (_: ActivityNotFoundException) { }
+            }
+            // Stock Android need not include a YAML/text editor. Keep the
+            // button useful by opening the real system document picker for a
+            // copy, rather than silently failing the desktop open command.
+            if (pendingConfigurationExport) return
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/yaml"
+                putExtra(Intent.EXTRA_TITLE, ConfigurationDocumentPolicy.FILENAME)
+            }
+            pendingConfigurationExport = true
+            try {
+                startActivityForResult(intent, CONFIGURATION_EXPORT_REQUEST)
+                Toast.makeText(this, R.string.configuration_save_copy, Toast.LENGTH_LONG).show()
+            } catch (_: ActivityNotFoundException) {
+                pendingConfigurationExport = false
+                Toast.makeText(this, R.string.file_picker_unavailable, Toast.LENGTH_LONG).show()
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, R.string.configuration_open_failed, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun saveConfigurationCopy(destination: Uri) {
+        Thread({
+            val saved = runCatching {
+                contentResolver.openInputStream(ConfigurationDocumentProvider.uri(this)).use { input ->
+                    requireNotNull(input)
+                    contentResolver.openOutputStream(destination, "wt").use { output ->
+                        requireNotNull(output)
+                        val buffer = ByteArray(32 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            check(total <= 16L * 1024 * 1024) { "Configuration document is too large" }
+                            output.write(buffer, 0, count)
+                        }
+                        output.flush()
+                    }
+                }
+            }.isSuccess
+            handler.post {
+                if (!isFinishing && !isDestroyed) Toast.makeText(this,
+                    if (saved) getString(R.string.download_saved, ConfigurationDocumentPolicy.FILENAME)
+                    else getString(R.string.download_failed), Toast.LENGTH_LONG).show()
+            }
+        }, "dsh-configuration-copy").apply { isDaemon = true }.start()
+    }
+
     private fun showError(message: String) {
         terminalError = true
         readyHostConfirmed = false
@@ -428,7 +546,25 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun navigateBackOrFinish() {
-        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else finish()
+        if (!::webView.isInitialized) {
+            finish()
+            return
+        }
+        if (webView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true) {
+            window.insetsController?.hide(WindowInsets.Type.ime())
+            return
+        }
+        if (backNavigationPending) return
+        if (!WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) {
+            if (webView.canGoBack()) webView.goBack() else finish()
+            return
+        }
+        backNavigationPending = true
+        webView.evaluateJavascript(BACK_SCRIPT) { result ->
+            backNavigationPending = false
+            if (isFinishing || isDestroyed || result == "true") return@evaluateJavascript
+            if (webView.canGoBack()) webView.goBack() else finish()
+        }
     }
 
     private fun registerBackCallback() {
@@ -466,6 +602,7 @@ class MainActivity : Activity() {
         // and are cancelled on destruction. The replacement must say so.
         outState.putBoolean(STATE_FILE_OPERATION_INTERRUPTED,
             pendingFileSelection != null || downloads.isRunning)
+        outState.putBoolean(STATE_CONFIGURATION_EXPORT, pendingConfigurationExport)
     }
 
     override fun onDestroy() {
@@ -487,8 +624,18 @@ class MainActivity : Activity() {
         private const val STATE_LAUNCH_URL = "dsh.launch.url"
         private const val STATE_PENDING_DOWNLOAD = "dsh.pending.download"
         private const val STATE_FILE_OPERATION_INTERRUPTED = "dsh.file.operation.interrupted"
+        private const val STATE_CONFIGURATION_EXPORT = "dsh.configuration.export"
         private const val FILE_SELECTION_REQUEST = 43
         private const val DOWNLOAD_DESTINATION_REQUEST = 44
+        private const val CONFIGURATION_EXPORT_REQUEST = 45
+        private val BACK_SCRIPT = """
+            (function () {
+                try {
+                    return typeof window.__DSH_ANDROID_BACK__ === 'function' &&
+                        window.__DSH_ANDROID_BACK__() === true;
+                } catch (error) { return false; }
+            })();
+        """.trimIndent()
         private val UI_STATE_SCRIPT = """
             (function () {
                 const root = document.getElementById('root');

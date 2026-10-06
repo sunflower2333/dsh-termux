@@ -19,6 +19,9 @@
     <string name="download_failed">文件保存失败</string>
     <string name="download_busy">正在保存另一份文件</string>
     <string name="download_local_only">只能保存当前 DSH 服务提供的文件</string>
+    <string name="configuration_open_with">打开 DSH 配置文件</string>
+    <string name="configuration_save_copy">没有可用的配置编辑器，请选择保存配置副本的位置</string>
+    <string name="configuration_open_failed">无法打开 DSH 配置文件</string>
     <string name="copy_error">复制错误详情</string>
     <string name="error_copied">错误详情已复制</string>
     <string name="error_details">错误详情</string>

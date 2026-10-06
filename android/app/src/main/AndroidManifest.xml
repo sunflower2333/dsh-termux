@@ -8,6 +8,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:scheme="content" android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="content" android:mimeType="text/plain" />
+        </intent>
+    </queries>
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -38,5 +48,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-started local DeepSeek Harness coding assistant server, kept available while switching apps or running a user task." />
         </service>
+        <provider
+            android:name=".ConfigurationDocumentProvider"
+            android:authorities="${applicationId}.configuration"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <grant-uri-permission android:path="/configuration" />
+        </provider>
     </application>
 </manifest>

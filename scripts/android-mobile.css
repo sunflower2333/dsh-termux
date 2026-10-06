@@ -49,6 +49,60 @@
     box-shadow: 8px 0 24px #0003 !important;
     border-right: .5px solid var(--dsw-alias-border-l3) !important;
   }
+  html[data-dsh-android-native] .pI_x6G_frame:not([data-sidebar-collapsed]) .pI_x6G_sidebarCol {
+    position: fixed !important;
+    right: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    box-shadow: none !important;
+    border: 0 !important;
+  }
+  html[data-dsh-android-native] .pI_x6G_frame:not([data-sidebar-collapsed]) .hHd-Xa_root { width: 100% !important; }
+  /* The desktop workspace header budgets 28px for Search and 60px for two
+     actions. Reserve the mobile buttons' full 44px targets without clipping
+     the last action, including while the real search field is expanded. */
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_sectionHeader {
+    height: 44px !important;
+    min-height: 44px !important;
+    margin-right: 0 !important;
+    gap: 0 !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_sectionLabel:not(.bhn1Oq_sectionLabelHidden) {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    text-overflow: ellipsis !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_searchSlot:not(.bhn1Oq_searchSlotExpanded) {
+    flex: 0 0 44px !important;
+    max-width: 44px !important;
+    margin-left: 4px !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_searchSlotExpanded {
+    flex: 1 1 0 !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_headerActions:not(.bhn1Oq_headerActionsHidden) {
+    max-width: none !important;
+    overflow: visible !important;
+    gap: 0 !important;
+    margin-left: 4px !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_headerActions > * + * { margin-left: 4px !important; }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_sectionLabelHidden,
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_headerActionsHidden { display: none !important; }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_search {
+    width: 100% !important;
+    height: 44px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_searchInput { margin-left: 0 !important; }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_sectionLabel,
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_searchSlot,
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_headerActions,
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_search { transition: none !important; }
   .hHd-Xa_root.hHd-Xa_collapsed {
     flex-direction: row !important;
     align-items: center !important;
@@ -98,9 +152,6 @@
     --dsh-composer-side-clearance: 8px !important;
   }
   [data-conversation-scroll] { scrollbar-gutter: auto !important; margin-right: 0 !important; }
-  /* The input menu belongs to this scroll surface. Its upstream viewport-only
-     limit lets its first rows extend behind the conversation header and clip.
-     These live measurements come from the composer's ResizeObserver. */
   [data-conversation-content][data-content-phase="active"] [data-trigger-menu] {
     max-height: max(0px, min(400px, calc(var(--dsh-conversation-viewport-height) - var(--dsh-composer-height) - 8px))) !important;
   }
@@ -189,7 +240,7 @@
   .uV2eYG_row { gap: 8px !important; }
   .uV2eYG_tools, .uV2eYG_modes, .uV2eYG_trailing { gap: 4px !important; }
 
-  /* Settings become a horizontal section picker above the complete form. */
+  /* Settings are a full phone page, with section navigation above the form. */
   [data-shortcut-modal="settings"] {
     flex-direction: column !important;
     width: calc(100vw - 16px) !important;
@@ -307,7 +358,78 @@
     display: none !important;
   }
 
-  /* Menus, listboxes and dialogs stay inside the WebView viewport. */
+  /* Android menus are pages within the inset WebView viewport. MenuSurface
+     portals them into body, avoiding composer/ledger clipping and transforms.
+     Explicit edges support Android 11's WebView, which has no inset shorthand. */
+  html[data-dsh-android-native] [data-menu-material],
+  html[data-dsh-android-native] [data-dsh-mobile-popover],
+  html[data-dsh-android-native] [data-dsh-mobile-detail],
+  html[data-dsh-android-native] [role="dialog"][aria-modal="true"],
+  html[data-dsh-android-native] [role="alertdialog"] {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    margin: 0 !important;
+    transform: none !important;
+    box-sizing: border-box !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: var(--dsw-alias-bg-base) !important;
+    overscroll-behavior: contain !important;
+  }
+  html[data-dsh-android-native] [data-menu-material],
+  html[data-dsh-android-native] [data-dsh-mobile-popover] { z-index: 1100 !important; }
+  html[data-dsh-android-native] [data-menu-material] {
+    display: flex !important;
+    flex-direction: column !important;
+    padding: 0 8px 8px !important;
+    overflow: hidden !important;
+  }
+  [data-dsh-mobile-menu-header] {
+    flex: none !important;
+    display: flex !important;
+    align-items: center !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    margin-bottom: 8px !important;
+    border-bottom: .5px solid var(--dsw-alias-border-l3) !important;
+  }
+  [data-dsh-mobile-menu-header] > button {
+    width: 44px !important;
+    height: 44px !important;
+    border: 0 !important;
+    background: transparent !important;
+    color: var(--dsw-alias-label-primary) !important;
+    font-size: 24px !important;
+    cursor: pointer !important;
+  }
+  [data-dsh-mobile-menu-header] > span {
+    flex: 1 !important;
+    min-width: 0 !important;
+    padding-left: 8px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+  [data-menu-material] > [class$="_viewport"],
+  html[data-dsh-android-native] [data-menu-material] > [class*="_viewport_"],
+  [data-menu-material] > [class$="_groups"],
+  [data-menu-material] > [role="listbox"] {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    max-width: 100% !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  /* Nested listboxes keep their parent's scroll budget and touch targets. */
   [role="menu"], [role="listbox"] {
     box-sizing: border-box !important;
     min-width: 0 !important;
@@ -318,6 +440,28 @@
     overflow-y: auto !important;
     -webkit-overflow-scrolling: touch !important;
   }
+  html[data-dsh-android-native] [data-menu-material][role] { overflow: hidden !important; }
+  /* Jobs keep their semantic list and original measuring ref inside the
+     shared full-screen surface; only this inner list owns the scrollbar. */
+  html[data-dsh-android-native] [data-menu-material] > [data-dsh-mobile-list="jobs"] {
+    position: static !important;
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  /* Cordis's original header is a title only. Its shared mobile surface now
+     supplies that title together with the same real Back action as menus. */
+  html[data-dsh-android-native] [data-cordis-panel] > header { display: none !important; }
   [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"] {
     min-height: 44px !important;
     box-sizing: border-box !important;
@@ -334,6 +478,7 @@
     overscroll-behavior: contain !important;
     -webkit-overflow-scrolling: touch !important;
   }
+  html[data-dsh-android-native] [data-shortcut-modal="settings"][role="dialog"] { overflow: hidden !important; }
 
   button, input, select, textarea, [role="button"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"] {
     touch-action: manipulation !important;
@@ -556,6 +701,7 @@
     --dsh-trajectory-bottom-clearance: 16px !important;
   }
   .Y0dWHa_details { top: 44px !important; }
+  html[data-dsh-android-native] .Y0dWHa_details { top: 0 !important; }
   [data-composer-seat] { --dsh-composer-text-max-height: 56px !important; }
   [data-composer-input] { min-height: 36px !important; }
   .uV2eYG_card { gap: 4px !important; padding-top: 4px !important; }

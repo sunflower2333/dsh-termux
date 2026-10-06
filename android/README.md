@@ -7,6 +7,30 @@ foreground service and keeps a resident notification while the app is in the
 background. The service does not expose a LAN listener and does not enable
 Full Access or change DSH's approval policy.
 
+## Android navigation and configuration
+
+On phone-sized screens, settings, menus and the sidebar fill the usable app
+viewport. Android Back first dismisses the keyboard, then closes the current
+menu or settings page, then the sidebar. These actions use DSH's own React
+controllers; they do not navigate away from the conversation. The native root
+reserves system-bar, display-cutout and keyboard insets, including when Android
+15 enforces edge-to-edge rendering for target SDK 35.
+
+**Open configuration file** prepares the active Web profile's
+`cordis.patch.yml` and opens Android's editor/viewer chooser. Only this file can
+be granted through the app's content provider. When no text editor or viewer is
+installed, Android's document picker lets the user save a configuration copy;
+this fallback does not edit or replace the active configuration. Cancelling the
+picker returns to the still-open settings page.
+
+Native navigation patches are staged only into the APK. The Termux package
+keeps its existing configuration-file opener. The Android settings preparation
+checks can be run from the repository root with a prepared DSH package:
+
+```bash
+node scripts/test-android-settings.mjs /path/to/dsh-package
+```
+
 ## Runtime bundle
 
 The Android runtime packaging step must provide all of these files before an
