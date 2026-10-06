@@ -25,7 +25,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Same-UID abstract Unix socket. Only the native-launched Node receives its bearer. */
-class MobileBridge(context: Context) : AutoCloseable {
+internal class MobileBridge(context: Context,
+    private val hostEvents: ((HostEvent, (Boolean) -> Unit) -> Unit)? = null,
+    private val notices: ((NativeNotice, (JSONObject) -> Unit) -> Unit)? = null,
+) : AutoCloseable {
     data class Credentials(val socketName: String, val token: String)
     private val app = context.applicationContext
     private val random = SecureRandom()
@@ -79,6 +82,31 @@ class MobileBridge(context: Context) : AutoCloseable {
         try {
             val input = BufferedInputStream(socket.inputStream)
             val request = readRequest(input, token)
+            if (request.path == NativeNoticeProtocol.PATH) {
+                val notice = try { NativeNoticeProtocol.parse(parseFields(request.body)) }
+                    catch (_: IllegalArgumentException) { throw HttpFailure(400, "invalid_request", "Invalid native notice") }
+                val sink = notices ?: throw HttpFailure(403, "forbidden", "Native notices unavailable")
+                val completed = CountDownLatch(1)
+                val value = AtomicReference<JSONObject>()
+                sink(notice) { result -> if (value.compareAndSet(null, result)) completed.countDown() }
+                if (!completed.await(2, TimeUnit.SECONDS)) throw HttpFailure(500, "timeout", "Native notice timed out")
+                respond(socket, 200, MobileUseController.success(value.get()))
+                return
+            }
+            if (request.path == HostEventProtocol.PATH) {
+                val event = try { HostEventProtocol.parse(parseFields(request.body)) }
+                    catch (_: IllegalArgumentException) { throw HttpFailure(400, "invalid_request", "Invalid native host event") }
+                val sink = hostEvents ?: throw HttpFailure(403, "forbidden", "Native host events unavailable")
+                val completed = CountDownLatch(1)
+                val accepted = AtomicReference<Boolean>()
+                sink(event) { value -> if (accepted.compareAndSet(null, value)) completed.countDown() }
+                if (!completed.await(5, TimeUnit.SECONDS)) {
+                    throw HttpFailure(500, "timeout", "Native host event timed out")
+                }
+                respond(socket, 200, JSONObject().put("ok", true)
+                    .put("value", JSONObject().put("accepted", accepted.get() == true)))
+                return
+            }
             val command = MobileProtocol.parse(MobileProtocol.operation(request.path), parseFields(request.body))
             val response = AtomicReference<JSONObject>()
             val completed = CountDownLatch(1)

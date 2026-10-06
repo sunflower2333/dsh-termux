@@ -76,6 +76,16 @@ jobs:
           set -euo pipefail
           bash scripts/build-termux.sh
 
+      - name: Verify Android tool and workspace integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="$GITHUB_WORKSPACE/build/package"
+          node scripts/test-android-mobile-tools.mjs "$package_dir"
+          node scripts/test-android-host-events.mjs "$package_dir"
+          node scripts/test-android-sandbox.mjs "$package_dir"
+          node scripts/test-android-workspace.mjs "$package_dir"
+
       # Restore only final source archives; the Bash script verifies them again.
       - name: Restore verified Bash source archives
         id: bash-source-cache

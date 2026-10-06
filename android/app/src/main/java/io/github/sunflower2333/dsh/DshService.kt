@@ -26,6 +26,7 @@ class DshService : Service() {
     private var mobileBridge: MobileBridge? = null
     private val hostPreferences by lazy { getSharedPreferences(HostPortPolicy.PREFERENCE_FILE, Context.MODE_PRIVATE) }
     private val main = Handler(Looper.getMainLooper())
+    private lateinit var taskNotifications: RuntimeTaskNotifications
     private var latestStartId = 0
     private var restartRequested = false
     @Volatile private var destroyed = false
@@ -37,8 +38,10 @@ class DshService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification(getString(R.string.starting_status)))
+        createTaskNotifications()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -55,6 +58,7 @@ class DshService : Service() {
             restartRequested = false
             stopping = true
             currentUrl = null
+            taskNotifications.close()
             closeMobileBridge()
             process?.let(::terminateProcess)
             // Interrupt cold extraction, but keep this Service until the
@@ -83,6 +87,8 @@ class DshService : Service() {
         restartRequested = false
         launchFinishing = false
         terminationScheduled.set(false)
+        taskNotifications.close()
+        createTaskNotifications()
         executor.execute {
             launchThread = Thread.currentThread()
             try {
@@ -137,7 +143,19 @@ class DshService : Service() {
                 .redirectErrorStream(true)
             val mobileCredentials = synchronized(mobileBridgeLock) {
                 check(!stopping && !destroyed) { "DSH start cancelled" }
-                val bridge = MobileBridge(this)
+                lateinit var bridge: MobileBridge
+                bridge = MobileBridge(this, hostEvents = { event, done ->
+                    main.post {
+                        val owned = synchronized(mobileBridgeLock) { mobileBridge === bridge }
+                        done(owned && !stopping && !destroyed && taskNotifications.accept(event))
+                    }
+                }, notices = { notice, done ->
+                    main.post {
+                        val owned = synchronized(mobileBridgeLock) { mobileBridge === bridge }
+                        done(if (owned && !stopping && !destroyed && process?.isAlive == true) taskNotifications.postNotice(notice)
+                            else org.json.JSONObject().put("posted", false).put("reason", "host_unavailable"))
+                    }
+                })
                 val credentials = try { bridge.start() } catch (error: Throwable) {
                     bridge.close()
                     throw error
@@ -209,7 +227,8 @@ class DshService : Service() {
                                         if (!stopping && !destroyed && !launchFinishing && process === child && child.isAlive) {
                                             currentUrl = candidate
                                             broadcast(ACTION_READY, candidate)
-                                            updateNotification(getString(R.string.running_status))
+                                            taskNotifications.refreshHostState()
+                                            updateNotification(taskStatusText(runtimeTaskStatus))
                                         }
                                     }
                                 }
@@ -251,7 +270,15 @@ class DshService : Service() {
                 process = null
                 currentUrl = null
             }
+            main.post { if (!destroyed) taskNotifications.close() }
         }
+    }
+
+    private fun createTaskNotifications() {
+        taskNotifications = RuntimeTaskNotifications(this, main, { !stopping && !destroyed && process?.isAlive == true }) {
+            if (!destroyed && !stopping && currentUrl != null) updateNotification(taskStatusText(it))
+        }
+        taskNotifications.setForeground(uiForeground)
     }
 
     private fun reportError(message: String, diagnostics: StartupDiagnostics) {
@@ -267,6 +294,8 @@ class DshService : Service() {
         restartRequested = false
         stopping = true
         closeMobileBridge()
+        taskNotifications.close()
+        if (activeInstance === this) activeInstance = null
         process?.let(::terminateProcess)
         executor.shutdownNow()
         main.removeCallbacksAndMessages(null)
@@ -326,6 +355,12 @@ class DshService : Service() {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIFICATION_ID, notification(text))
     }
 
+    private fun taskStatusText(status: RuntimeTaskStatus): String = when {
+        status.running > 0 -> getString(R.string.running_tasks_status, status.running)
+        status.waiting > 0 -> getString(R.string.waiting_tasks_status, status.waiting)
+        else -> getString(R.string.running_status)
+    }
+
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(
@@ -343,6 +378,8 @@ class DshService : Service() {
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setShowWhen(false)
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), getString(R.string.mobile_use_pause), pause).build())
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), getString(R.string.stop), stop).build())
@@ -361,6 +398,7 @@ class DshService : Service() {
         const val ACTION_START = "io.github.sunflower2333.dsh.START"
         const val ACTION_STOP = "io.github.sunflower2333.dsh.STOP"
         const val ACTION_MOBILE_PAUSE = "io.github.sunflower2333.dsh.MOBILE_PAUSE"
+        const val ACTION_OPEN_SESSION = "io.github.sunflower2333.dsh.OPEN_SESSION"
         const val ACTION_READY = "io.github.sunflower2333.dsh.READY"
         const val ACTION_LOG = "io.github.sunflower2333.dsh.LOG"
         const val ACTION_ERROR = "io.github.sunflower2333.dsh.ERROR"
@@ -368,6 +406,16 @@ class DshService : Service() {
         const val EXTRA_VALUE = "value"
         private const val CHANNEL_ID = "dsh-service"
         private const val NOTIFICATION_ID = 1001
+        @Volatile internal var runtimeTaskStatus = RuntimeTaskStatus()
+        @Volatile private var activeInstance: DshService? = null
+        @Volatile private var uiForeground = false
+
+        internal fun setUiForeground(value: Boolean) {
+            uiForeground = value
+            activeInstance?.let { service -> service.main.post {
+                if (!service.destroyed) service.taskNotifications.setForeground(value)
+            } }
+        }
         // dsh web prints the browser launch URL with its one-time auth token
         // in the query string (for example: http://127.0.0.1:43127/?token=…).
         // Keep that query intact: loading the clean URL makes the web server

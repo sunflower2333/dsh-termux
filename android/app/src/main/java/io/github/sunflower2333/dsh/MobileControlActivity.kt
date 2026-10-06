@@ -15,6 +15,7 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -23,12 +24,12 @@ import org.json.JSONObject
 
 /** Native, user-owned controls. Web content cannot grant a Mobile use session. */
 class MobileControlActivity : Activity() {
+    private val colors by lazy { NativeUiColors(this) }
     private lateinit var enabledValue: TextView
     private lateinit var connectedValue: TextView
     private lateinit var activeValue: TextView
     private lateinit var reasonValue: TextView
     private lateinit var packageValue: TextView
-    private lateinit var packageRow: LinearLayout
     private lateinit var allowButton: Button
     private lateinit var pauseButton: Button
     private val handler = Handler(Looper.getMainLooper())
@@ -40,6 +41,7 @@ class MobileControlActivity : Activity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(AndroidAppearance.theme(this))
         super.onCreate(savedInstanceState)
         title = getString(R.string.mobile_use_title)
         setContentView(buildView())
@@ -63,7 +65,7 @@ class MobileControlActivity : Activity() {
     private fun buildView(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(colors.background)
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
                 val keyboard = insets.getInsets(WindowInsets.Type.ime())
@@ -71,7 +73,7 @@ class MobileControlActivity : Activity() {
                 insets
             }
         }
-        root.addView(Button(this).apply {
+        root.addView(colors.style(Button(this)).apply {
             text = getString(R.string.mobile_use_back)
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
             minHeight = dp(48)
@@ -87,21 +89,23 @@ class MobileControlActivity : Activity() {
             isAccessibilityHeading = true
         })
         content.addView(label(R.string.mobile_use_description, 15f).apply {
-            setTextColor(SECONDARY_TEXT)
+            setTextColor(colors.secondary)
             setPadding(0, dp(12), 0, dp(20))
         })
         enabledValue = addStatusRow(content, R.string.mobile_use_enabled_label)
         connectedValue = addStatusRow(content, R.string.mobile_use_connected_label)
         activeValue = addStatusRow(content, R.string.mobile_use_active_label)
         reasonValue = label(R.string.mobile_use_status_unavailable, 14f).apply {
-            setTextColor(SECONDARY_TEXT)
+            setTextColor(colors.secondary)
             setPadding(0, dp(8), 0, dp(16))
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
         content.addView(reasonValue)
         packageValue = addStatusRow(content, R.string.mobile_use_package_label)
-        packageRow = packageValue.parent as LinearLayout
-        packageRow.visibility = View.GONE
+        packageValue.minLines = 2
+        packageValue.maxLines = 2
+        packageValue.ellipsize = android.text.TextUtils.TruncateAt.END
+        packageValue.text = getString(R.string.mobile_use_package_none)
 
         content.addView(actionButton(R.string.mobile_use_accessibility_settings) {
             try {
@@ -122,7 +126,19 @@ class MobileControlActivity : Activity() {
         }
         content.addView(pauseButton)
         content.addView(label(R.string.mobile_use_pause_hint, 13f).apply {
-            setTextColor(SECONDARY_TEXT)
+            setTextColor(colors.secondary)
+            setPadding(0, dp(8), 0, 0)
+        })
+        content.addView(CheckBox(this).apply {
+            text = getString(R.string.mobile_use_feedback_label)
+            setTextColor(colors.primary)
+            minHeight = dp(48)
+            filterTouchesWhenObscured = true
+            isChecked = MobileFeedbackSettings.enabled(this@MobileControlActivity)
+            setOnCheckedChangeListener { _, checked -> MobileFeedbackSettings.setFromUser(this@MobileControlActivity, checked) }
+        })
+        content.addView(label(R.string.mobile_use_feedback_hint, 13f).apply {
+            setTextColor(colors.secondary)
             setPadding(0, dp(8), 0, 0)
         })
         root.addView(ScrollView(this).apply {
@@ -136,7 +152,7 @@ class MobileControlActivity : Activity() {
     private fun label(resource: Int, size: Float) = TextView(this).apply {
         text = getString(resource)
         textSize = size
-        setTextColor(PRIMARY_TEXT)
+        setTextColor(colors.primary)
     }
 
     private fun addStatusRow(parent: LinearLayout, resource: Int): TextView {
@@ -155,7 +171,7 @@ class MobileControlActivity : Activity() {
         return value
     }
 
-    private fun actionButton(resource: Int, action: () -> Unit) = Button(this).apply {
+    private fun actionButton(resource: Int, action: () -> Unit) = colors.style(Button(this)).apply {
         text = getString(resource)
         isAllCaps = false
         minHeight = dp(48)
@@ -178,7 +194,7 @@ class MobileControlActivity : Activity() {
             }
             allowButton.isEnabled = false
             pauseButton.isEnabled = true
-            packageRow.visibility = View.GONE
+            updateText(packageValue, getString(R.string.mobile_use_package_none))
             return
         }
         val (enabled, connected, active) = flags
@@ -186,7 +202,7 @@ class MobileControlActivity : Activity() {
         updateText(enabledValue, getString(if (enabled) R.string.mobile_use_enabled else R.string.mobile_use_disabled))
         updateText(connectedValue, getString(if (connected) R.string.mobile_use_connected else R.string.mobile_use_disconnected))
         updateText(activeValue, getString(if (active) R.string.mobile_use_active else R.string.mobile_use_paused))
-        activeValue.setTextColor(if (active) Color.rgb(18, 115, 63) else PRIMARY_TEXT)
+        activeValue.setTextColor(if (active) colors.active else colors.primary)
         updateText(reasonValue, getString(when {
             active -> R.string.mobile_use_reason_active
             !enabled -> R.string.mobile_use_reason_disabled
@@ -199,8 +215,7 @@ class MobileControlActivity : Activity() {
         allowButton.isEnabled = enabled && connected && !active && reason != "device_locked" && reason != "host_stopped"
         pauseButton.isEnabled = active
         val currentPackage = status.optString("currentPackage").takeUnless { it.isBlank() || it == "null" }
-        packageRow.visibility = if (currentPackage == null) View.GONE else View.VISIBLE
-        if (currentPackage != null) updateText(packageValue, currentPackage)
+        updateText(packageValue, currentPackage ?: getString(R.string.mobile_use_package_none))
     }
 
     private fun updateText(view: TextView, value: String) {
@@ -215,16 +230,14 @@ class MobileControlActivity : Activity() {
         window.navigationBarColor = Color.TRANSPARENT
         window.isStatusBarContrastEnforced = false
         window.isNavigationBarContrastEnforced = false
+        val light = if (colors.dark) 0 else
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
         window.insetsController?.setSystemBarsAppearance(
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            light,
             WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
         )
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
 
-    companion object {
-        private val PRIMARY_TEXT = Color.rgb(24, 34, 52)
-        private val SECONDARY_TEXT = Color.rgb(90, 103, 122)
-    }
 }

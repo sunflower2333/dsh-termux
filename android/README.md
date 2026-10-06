@@ -16,6 +16,11 @@ controllers; they do not navigate away from the conversation. The native root
 reserves system-bar, display-cutout and keyboard insets, including when Android
 15 enforces edge-to-edge rendering for target SDK 35.
 
+Selecting a sidebar destination closes the full-screen sidebar after DSH has
+opened that destination. Appearance keeps DSH's persisted Light, Dark and
+System preference. System follows Android's actual night mode, including live
+changes; native pages and system-bar colors match the selected appearance.
+
 **Open configuration file** prepares the active Web profile's
 `cordis.patch.yml` and opens Android's editor/viewer chooser. Only this file can
 be granted through the app's content provider. When no text editor or viewer is
@@ -31,6 +36,62 @@ checks can be run from the repository root with a prepared DSH package:
 node scripts/test-android-settings.mjs /path/to/dsh-package
 ```
 
+## Background tasks and conversation notifications
+
+Switching apps or closing the chat Activity does not stop the foreground DSH
+service. The server owns the active conversation, not the WebView. Its native
+notification distinguishes running tasks, requests waiting for a response and
+an idle host. A bounded partial wake lock is held only while the server reports
+active work; waiting for an answer, idle state, lost heartbeats and service
+shutdown release it.
+
+DSH's existing question and approval events also produce Android notifications.
+Tap a request to open its original conversation through DSH's own navigation;
+answer or approve inside DSH. Tapping does not grant a tool permission. Generic
+notification text keeps prompts, command arguments and credentials out of the
+notification payload. Completed turns can notify while the chat is in the
+background.
+
+Models can also call `notify_user` with a short title and message. This uses the
+normal DSH tool runtime and targets the initiating conversation, including when
+a child agent calls it. It respects Android notification settings and a
+per-conversation rate limit, and reports whether Android accepted the notice.
+This tool does not require a phone-control grant.
+
+Open **Settings → Background & notifications** for native service/task status,
+notification permission and the system battery optimization settings. Android
+13 and newer request notification permission only from this settings page.
+Battery exceptions are an explicit system choice. A system force-stop or
+process kill interrupts in-flight work; saved conversations remain available,
+and the app does not automatically replay interrupted tool actions.
+
+## Workspaces
+
+On a fresh installation, DSH creates its default workspace at
+`<app data>/files/Documents/deepseek-harness/default-workspace`.
+The directory browser starts in the app's Documents directory. Selecting a
+different workspace creates or reuses that workspace's session; it does not
+move an existing conversation's working directory. Cancellation leaves the
+previous selection intact.
+
+The workspace backend uses ordinary file paths under Android's app permissions.
+External SAF `content://` trees are not filesystem workspaces. Attachment
+import and document export use their separate Android pickers. See
+[WORKSPACES.md](WORKSPACES.md) for the supported paths and verification steps.
+
+## File access and command approvals
+
+The Android APK keeps DSH's selected file-tool write restrictions. Android's
+ordinary app UID is an app boundary; it cannot confine Bash to a workspace like
+DSH's desktop command sandbox. In a restricted mode, each Bash invocation
+requests DSH's existing single-command approval before execution. Rejection or
+cancellation starts no command. Approval affects that command only and leaves
+the selected file policy unchanged. No default Full Access is enabled.
+
+The Android permission panel describes file access rather than claiming an
+available command sandbox. See [SANDBOX.md](SANDBOX.md) for the actual boundary
+and verification commands.
+
 ## Mobile use
 
 DSH's Settings page includes a **Mobile use** tab that opens native controls.
@@ -40,12 +101,19 @@ control paused. The native page, notification's **Pause control** action, and
 `mobile_stop` revoke the current grant. DSH host restarts, service disconnects,
 and a locked display require another native grant.
 
-The APK registers `mobile_status`, `mobile_observe`, `mobile_click`,
-`mobile_type`, `mobile_swipe`, `mobile_back`, and `mobile_stop` in DSH's existing
+The APK registers `mobile_status`, `mobile_list_apps`, `mobile_open_app`,
+`mobile_observe`, `mobile_click`, `mobile_type`, `mobile_swipe`, `mobile_back`,
+and `mobile_stop` in DSH's existing
 tool runtime. Observation supplies bounded accessibility nodes. Image-capable
 models also receive a real Android screenshot as a DSH image attachment;
 text-only models receive the node tree with an explicit screenshot omission.
 Android 11 screenshots require at least 1100 ms between captures.
+
+Phone control operates on the foreground window. `mobile_open_app` brings an
+enabled launcher app to the foreground; it cannot click a hidden background
+window. Native click and swipe feedback shows where the action occurred without
+intercepting touches. The native control page lets the user turn feedback off,
+and observation excludes the feedback layer. See [mobile-details.md](mobile-details.md).
 
 Actions require the current native grant and a recent observation of the same
 window. Observe again after every action or stale-observation error. Text input
@@ -65,7 +133,13 @@ socket fixture:
 
 ```bash
 node scripts/test-android-mobile-tools.mjs /path/to/dsh-package
+node scripts/test-android-host-events.mjs /path/to/dsh-package
+node scripts/test-android-sandbox.mjs /path/to/dsh-package
+node scripts/test-android-workspace.mjs /path/to/dsh-package
 ```
+
+The Android workflow runs these integration checks before compiling Node, then
+runs native JVM tests and Android lint before assembling and signing the APK.
 
 The optional `scripts/test-support/nim-test-relay.py` and
 `verify-mobile-nim.py` are bounded test helpers for a separately configured

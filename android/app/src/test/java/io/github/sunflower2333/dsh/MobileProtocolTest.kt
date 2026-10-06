@@ -222,6 +222,8 @@ class MobileProtocolTest {
         MobileOperation.TYPE -> base + mapOf("nodeId" to "node:3", "text" to "fixture")
         MobileOperation.SWIPE -> base + mapOf("fromX" to 0, "fromY" to 10, "toX" to 20, "toY" to 30)
         MobileOperation.BACK -> base
+        MobileOperation.LIST_APPS -> mapOf("sessionId" to session)
+        MobileOperation.OPEN_APP -> base + ("packageName" to "com.android.settings")
     }
 
     private fun expectFailure(

@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
@@ -34,6 +35,12 @@ import java.util.concurrent.atomic.AtomicLong
 /** Android's actual accessibility channel. No ADB, shell input, or WebView injection. */
 class MobileAccessibilityService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
+    private val feedback by lazy { MobileActionFeedback(this, main) }
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) { }
+        override fun onDisplayRemoved(displayId: Int) { if (displayId == Display.DEFAULT_DISPLAY) feedback.hide() }
+        override fun onDisplayChanged(displayId: Int) { if (displayId == Display.DEFAULT_DISPLAY) feedback.hide() }
+    }
     private val screenshotExecutor = Executors.newSingleThreadExecutor()
     // A late platform callback must still close its HardwareBuffer after teardown.
     private val screenshotCallbacks = Executor { task ->
@@ -53,6 +60,7 @@ class MobileAccessibilityService : AccessibilityService() {
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate() {
         super.onCreate()
+        getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, main)
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(screenReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(screenReceiver, filter)
@@ -82,11 +90,20 @@ class MobileAccessibilityService : AccessibilityService() {
             screenReceiverRegistered = false
         }
         invalidateObservations()
+        getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener)
+        feedback.close()
         screenshotExecutor.shutdown()
         super.onDestroy()
     }
 
-    internal fun invalidateObservations() { observation = null }
+    internal fun invalidateObservations() { observation = null; hideFeedback() }
+    internal fun hideFeedback() { main.post { feedback.hide() } }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        MobileUseController.detach(this)
+        invalidateObservations()
+        return super.onUnbind(intent)
+    }
 
     internal fun execute(command: MobileCommand, grant: MobileUseController.Grant, complete: (JSONObject) -> Unit) {
         if (!busy.compareAndSet(false, true)) {
@@ -115,7 +132,19 @@ class MobileAccessibilityService : AccessibilityService() {
             try {
                 requireCurrent()
                 when (command) {
-                    is MobileCommand.Observe -> observe(command, grant, ::finish, ::requireCurrent) { finished.get() }
+                    is MobileCommand.Observe -> {
+                        fun captureAfterFeedback() {
+                            try {
+                                requireCurrent()
+                                val delay = feedback.captureDelayMs()
+                                if (delay > 0) main.postDelayed({ captureAfterFeedback() }, delay)
+                                else observe(command, grant, ::finish, ::requireCurrent) { finished.get() }
+                            } catch (error: NativeFailure) {
+                                finish(MobileUseController.failure(error.code, error.message ?: "Observation unavailable"))
+                            } catch (_: Exception) { finish(MobileUseController.failure("internal", "The phone observation failed")) }
+                        }
+                        captureAfterFeedback()
+                    }
                     is MobileCommand.Click -> {
                         val snapshot = requireObservation(command.observationId, grant, strictRevision = command.nodeId == null)
                         val point = if (command.nodeId != null) {
@@ -131,6 +160,7 @@ class MobileAccessibilityService : AccessibilityService() {
                     }
                     is MobileCommand.Type -> {
                         val snapshot = requireObservation(command.observationId, grant, strictRevision = false)
+                        var outline: Rect? = null
                         val accepted = withTarget(snapshot, command.nodeId) { node ->
                             if (node.isPassword) throw NativeFailure("password_field", "Phone control cannot fill password fields")
                             if (!node.isEnabled) throw NativeFailure("not_enabled", "This node is disabled")
@@ -139,6 +169,7 @@ class MobileAccessibilityService : AccessibilityService() {
                             }
                             val rect = Rect().also(node::getBoundsInScreen)
                             requireVisible(node, rect)
+                            outline = Rect(rect)
                             val args = Bundle().apply {
                                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, command.text)
                             }
@@ -147,6 +178,7 @@ class MobileAccessibilityService : AccessibilityService() {
                         }
                         observation = null
                         if (!accepted) throw NativeFailure("action_failed", "Android rejected text replacement")
+                        outline?.let { feedback.type(it, snapshot.display.width, snapshot.display.height) }
                         finish(performed("type", command.observationId))
                     }
                     is MobileCommand.Swipe -> {
@@ -163,6 +195,24 @@ class MobileAccessibilityService : AccessibilityService() {
                         requireCurrent()
                         if (!performGlobalAction(GLOBAL_ACTION_BACK)) throw NativeFailure("action_failed", "Android rejected Back")
                         finish(performed("back", command.observationId))
+                    }
+                    is MobileCommand.ListApps -> {
+                        val value = MobileLauncherApps(this).list(grant.sessionId)
+                        requireCurrent()
+                        finish(MobileUseController.success(value))
+                    }
+                    is MobileCommand.OpenApp -> {
+                        requireObservation(command.observationId, grant)
+                        val intent = MobileLauncherApps(this).intent(command.packageName)
+                            ?: throw NativeFailure("app_not_available", "This package has no available launcher activity")
+                        requireCurrent()
+                        observation = null
+                        feedback.hide()
+                        try { startActivity(intent) }
+                        catch (_: ActivityNotFoundException) { throw NativeFailure("app_not_available", "The launcher activity is unavailable") }
+                        catch (_: SecurityException) { throw NativeFailure("app_not_available", "Android does not allow this launcher activity") }
+                        finish(MobileUseController.success(JSONObject().put("performed", true).put("action", "open_app")
+                            .put("observationId", command.observationId).put("packageName", command.packageName).put("foregroundOnly", true)))
                     }
                     else -> throw NativeFailure("invalid_request", "Unsupported native phone action")
                 }
@@ -364,10 +414,13 @@ class MobileAccessibilityService : AccessibilityService() {
                 finish(performed(action, observationId))
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
+                feedback.hide()
                 finish(MobileUseController.failure("action_cancelled", "Android cancelled the touch gesture"))
             }
         }, main)
         if (!accepted) throw NativeFailure("action_failed", "Android rejected the touch gesture")
+        val screen = displayState()
+        feedback.gesture(fromX, fromY, toX, toY, duration, screen.width, screen.height)
     }
 
     private fun performed(action: String, id: String): JSONObject = MobileUseController.success(

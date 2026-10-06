@@ -240,6 +240,103 @@
   .uV2eYG_row { gap: 8px !important; }
   .uV2eYG_tools, .uV2eYG_modes, .uV2eYG_trailing { gap: 4px !important; }
 
+  /* Question and approval cards are part of the real conversation composer.
+     Give their text the full phone width and let action rows wrap instead of
+     pushing long translations or multiple-question pagers off the screen. */
+  .Mbwy4a_frame, .LVzXQa_frame, .mna1RW_root {
+    min-width: 0 !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+  .Mbwy4a_card, .LVzXQa_card, .mna1RW_card {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+  /* A fixed heading above a separately scrolling answer body can consume
+     nearly the entire desktop 60vh limit on a phone. Scroll the complete
+     question instead, with its actual actions pinned inside the card. The
+     measured conversation height already excludes Android's resized IME. */
+  .Mbwy4a_card:not(.Mbwy4a_cardMinimized) {
+    max-height: min(520px, calc(var(--dsh-conversation-viewport-height, 100vh) - 16px)) !important;
+    overflow-y: auto !important;
+    /* Keep browser focus/scrollIntoView targets above the sticky action row
+       and its normal one-line validation message. The footer also retains
+       its original flow space after the final answer field. */
+    scroll-padding-bottom: 96px !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  .Mbwy4a_header, .Mbwy4a_footer, .LVzXQa_footer, .mna1RW_actionRow {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+  .Mbwy4a_headingBlock { flex: 1 1 100% !important; }
+  .Mbwy4a_headerActions { margin-left: auto !important; }
+  .Mbwy4a_footerActions, .LVzXQa_actions { flex-wrap: wrap !important; margin-left: auto !important; }
+  .Mbwy4a_body {
+    flex: none !important;
+    overflow: visible !important;
+  }
+  .Mbwy4a_footer {
+    position: sticky !important;
+    bottom: 0 !important;
+    z-index: 1 !important;
+    align-items: center !important;
+    margin-top: 4px !important;
+    padding-top: 8px !important;
+    background: var(--dsw-specific-input-major) !important;
+  }
+  .Mbwy4a_title, .Mbwy4a_description, .Mbwy4a_optionLabel,
+  .Mbwy4a_reviewNote, .LVzXQa_title, .LVzXQa_description, .mna1RW_headline {
+    overflow-wrap: break-word !important;
+    word-break: break-word !important;
+  }
+  .Mbwy4a_waitButton { white-space: normal !important; text-align: left !important; }
+  /* The empty status node used to force pager, status and actions onto three
+     lines. Errors remain a complete final row without reserving a blank row. */
+  .Mbwy4a_feedback {
+    order: 1 !important;
+    flex: 1 0 100% !important;
+    text-align: left !important;
+  }
+  .Mbwy4a_feedback:empty { display: none !important; }
+  .mna1RW_actionRow > button { max-width: 100% !important; white-space: normal !important; }
+  .mna1RW_body { min-width: 0 !important; }
+  /* Long command details must fit below the real conversation header. Let
+     only the approval body shrink and scroll; the warning strip and actual
+     wrapped decision controls keep their measured, translated heights. */
+  .mna1RW_card {
+    display: flex !important;
+    flex-direction: column !important;
+    max-height: calc(var(--dsh-conversation-viewport-height, 100vh) - 20px) !important;
+  }
+  .mna1RW_strip, .mna1RW_actionRow { flex-shrink: 0 !important; }
+  .mna1RW_body {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+  }
+
+  /* Message actions were laid out in a fixed desktop 28px row, even after
+     their hit targets grew to 44px. Reserve their height and make them visible
+     to touch users without relying on a WebView's reported hover capability. */
+  .xzv4MW_actions {
+    height: auto !important;
+    min-height: 44px !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    opacity: 1 !important;
+  }
+  .xzv4MW_endInfo { flex-wrap: wrap !important; margin-left: 0 !important; }
+  .Sixlwa_userStack, .Sixlwa_bubble { min-width: 0 !important; max-width: 100% !important; }
+  .Sixlwa_bubble { overflow-wrap: break-word !important; word-break: break-word !important; }
+
+  /* Keep queued attachments, editable messages and real action buttons inside
+     one narrow row. The editor owns its line and the controls retain 44px. */
+  ._7yHdaG_row { flex-wrap: wrap !important; gap: 6px !important; padding: 8px !important; }
+  ._7yHdaG_preview, ._7yHdaG_editor { flex: 1 1 100% !important; width: 100% !important; }
+  ._7yHdaG_attachments { flex: 1 1 120px !important; max-width: 100% !important; }
+  ._7yHdaG_actions { margin-left: auto !important; gap: 4px !important; }
+  ._7yHdaG_status { white-space: normal !important; }
+
   /* Settings are a full phone page, with section navigation above the form. */
   [data-shortcut-modal="settings"] {
     flex-direction: column !important;
@@ -258,13 +355,43 @@
   .VOzbGW_content { min-height: 0 !important; }
   .VOzbGW_header { height: auto !important; min-height: 52px !important; padding: 4px 12px !important; align-items: center !important; }
   .VOzbGW_options { padding: 0 16px 16px !important; overflow-x: hidden !important; }
+  [data-dsh-android-runtime-settings] {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    min-width: 0 !important;
+  }
+  [data-dsh-android-runtime-settings] > h2 {
+    margin: 0 0 12px !important;
+    font-size: 18px !important;
+    line-height: 26px !important;
+    font-weight: 600 !important;
+  }
+  [data-dsh-android-runtime-settings] > p {
+    margin: 0 0 16px !important;
+    color: var(--dsw-alias-label-secondary) !important;
+    font-size: 14px !important;
+    line-height: 22px !important;
+    overflow-wrap: break-word !important;
+  }
+  [data-dsh-android-runtime-settings] > button {
+    max-width: 100% !important;
+    white-space: normal !important;
+    text-align: left !important;
+  }
   [data-slot="settings.general.item"] > div { flex-wrap: wrap !important; gap: 12px !important; }
   [data-slot="settings.general.item"] > div[class$="_row"] > div:first-child { flex: 1 1 170px !important; min-width: 0 !important; }
   .bVCLcG_stepper { min-height: 44px !important; height: auto !important; gap: 8px !important; padding-left: 8px !important; padding-right: 8px !important; }
   .bVCLcG_arrows { flex-direction: row !important; position: static !important; opacity: 1 !important; }
   .bVCLcG_arrow { min-width: 44px !important; min-height: 44px !important; }
   ._8HJdBW_cubeRow { flex-direction: row !important; flex-wrap: nowrap !important; gap: 8px !important; }
-  ._8HJdBW_themeCube { min-width: 0 !important; flex: 1 1 0 !important; }
+  ._8HJdBW_themeCube {
+    min-width: 0 !important;
+    flex: 1 1 0 !important;
+    min-height: 88px !important;
+    padding: 12px 6px !important;
+    white-space: normal !important;
+  }
   .zGbnIq_rowHead, .zGbnIq_rowActions, .zGbnIq_editorActions { flex-wrap: wrap !important; }
   .zGbnIq_modelRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; }
   .zGbnIq_modelAdvanced { grid-template-columns: minmax(0, 1fr) !important; }
@@ -614,6 +741,9 @@
     .bVCLcG_stepper, .bVCLcG_arrows,
     ._8HJdBW_cubeRow,
     .zGbnIq_rowHead, .zGbnIq_rowActions, .zGbnIq_editorActions,
+    .Mbwy4a_header, .Mbwy4a_headerActions, .Mbwy4a_footer, .Mbwy4a_footerActions,
+    .LVzXQa_footer, .LVzXQa_actions, .mna1RW_actionRow,
+    .xzv4MW_actions, .xzv4MW_endInfo, ._7yHdaG_row, ._7yHdaG_actions,
     [data-dockkit-strip-chrome], dockkit-strip-chrome {
       gap: 0 !important;
     }
@@ -654,6 +784,12 @@
     .zGbnIq_rowHead > :last-child,
     .zGbnIq_rowActions > :last-child,
     .zGbnIq_editorActions > :last-child { margin-right: 0 !important; }
+    .Mbwy4a_headerActions > * + *, .Mbwy4a_footerActions > * + *,
+    .LVzXQa_actions > * + *, .mna1RW_actionRow > * + *,
+    .xzv4MW_actions > * + *, ._7yHdaG_actions > * + * { margin-left: 4px !important; }
+    .Mbwy4a_headerActions, .Mbwy4a_footerActions, .Mbwy4a_feedback,
+    .LVzXQa_actions, ._7yHdaG_actions { margin-top: 6px !important; }
+    ._7yHdaG_row > * { margin-bottom: 4px !important; }
   }
 }
 /* adjustResize already gives WebView the keyboard's remaining height. Budget
@@ -704,6 +840,11 @@
   html[data-dsh-android-native] .Y0dWHa_details { top: 0 !important; }
   [data-composer-seat] { --dsh-composer-text-max-height: 56px !important; }
   [data-composer-input] { min-height: 36px !important; }
+  /* The question card uses the measured conversation viewport above, so
+     headings, answers and pinned actions share the resized keyboard space. */
+  .Mbwy4a_header { padding-top: 4px !important; }
+  .Mbwy4a_footer { margin-top: 4px !important; }
+  .Mbwy4a_options { margin-top: 4px !important; }
   .uV2eYG_card { gap: 4px !important; padding-top: 4px !important; }
   .uV2eYG_row { padding-top: 0 !important; padding-bottom: 0 !important; }
   .uV2eYG_row > * { margin-bottom: 0 !important; }

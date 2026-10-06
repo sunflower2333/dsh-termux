@@ -77,6 +77,7 @@ object MobileUseController {
     }
 
     internal fun updatePackage(value: String?) { currentPackage = value }
+    internal fun hideFeedback() { synchronized(lock) { service?.hideFeedback() } }
 
     internal data class Grant(val sessionId: String, val generation: Long, val service: MobileAccessibilityService)
 
@@ -100,6 +101,8 @@ object MobileUseController {
             is MobileCommand.Type -> command.sessionId
             is MobileCommand.Swipe -> command.sessionId
             is MobileCommand.Back -> command.sessionId
+            is MobileCommand.ListApps -> command.sessionId
+            is MobileCommand.OpenApp -> command.sessionId
             else -> null
         }
         val grant = synchronized(lock) {

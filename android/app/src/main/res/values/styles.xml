@@ -6,4 +6,11 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">@drawable/dsh_launch_background</item>
     </style>
+    <style name="AppThemeDark" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#6CA3FF</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">@drawable/dsh_launch_background</item>
+    </style>
 </resources>

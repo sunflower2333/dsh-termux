@@ -5,6 +5,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MobileControlNavigationTest {
+    @Test fun runtimeSettingsUsesSameOriginExactNativePath() {
+        val ready = "http://127.0.0.1:4312/?token=test-only"
+        val page = "http://127.0.0.1:4312/"
+        val action = "http://127.0.0.1:4312${WebNavigation.RUNTIME_SETTINGS_PATH}"
+        assertTrue(WebNavigation.isRuntimeSettingsRequest(action, page, ready))
+        for (candidate in listOf("$action?permission=true", "$action#grant", "$action/",
+            action.replace("4312", "4313"), action.replace("runtime-settings", "%72untime-settings"))) {
+            assertFalse(WebNavigation.isRuntimeSettingsRequest(candidate, page, ready))
+        }
+        assertFalse(WebNavigation.isRuntimeSettingsRequest(action, "https://example.test/", ready))
+        assertFalse(WebNavigation.isRuntimeSettingsRequest(action, page, null))
+    }
     @Test fun nativeControlRequiresTheCurrentDshOriginAndAnExactPath() {
         val ready = "http://127.0.0.1:4312/?token=test-only"
         val page = "http://127.0.0.1:4312/session#chat"

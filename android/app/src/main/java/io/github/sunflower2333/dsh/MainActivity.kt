@@ -1,6 +1,5 @@
 package io.github.sunflower2333.dsh
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
@@ -12,7 +11,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -32,6 +34,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebMessage
+import android.webkit.WebMessagePort
+import android.webkit.WebSettings
 import android.widget.FrameLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -41,10 +46,18 @@ import android.window.OnBackInvokedDispatcher
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.StringReader
+import android.util.JsonReader
+import android.util.JsonToken
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var errorBar: TextView
+    private lateinit var contentRoot: FrameLayout
+    private var dshUiVisible = false
+    @Volatile private var themeReadAllowed = false
+    private var themeGeneration = 0
+    private var themePorts: Array<WebMessagePort>? = null
     private val handler = Handler(Looper.getMainLooper())
     private var terminalError = false
     private var lastErrorMessage: String? = null
@@ -58,6 +71,8 @@ class MainActivity : Activity() {
     private var uiCheckGeneration = 0
     private var backNavigationPending = false
     private var pendingConfigurationExport = false
+    private var pendingNotificationSession: String? = null
+    private var notificationNavigationPending = false
     private val webDiagnostics by lazy { StartupDiagnostics(File(cacheDir, "dsh-webview.log")) }
     // Keep the callback behind an Any-typed slot: OnBackInvokedCallback was
     // introduced in API 33 while this client still supports API 30.
@@ -81,6 +96,8 @@ class MainActivity : Activity() {
                     if (reload) {
                         downloadPageReady = false
                         webView.visibility = View.INVISIBLE
+                        dshUiVisible = false
+                        contentRoot.setBackgroundColor(Color.TRANSPARENT)
                         webView.loadUrl(value)
                     }
                     else awaitDshUi()
@@ -97,6 +114,7 @@ class MainActivity : Activity() {
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(AndroidAppearance.theme(this))
         super.onCreate(savedInstanceState)
         // Userdebug Android images can enable WebView debugging by default.
         // Set both build modes explicitly before creating the WebView.
@@ -110,9 +128,10 @@ class MainActivity : Activity() {
         configureSystemBars()
         restoreWebState(savedInstanceState)
         restoreFileOperations(savedInstanceState)
+        pendingNotificationSession = savedInstanceState?.getString(STATE_NOTIFICATION_SESSION)
+        consumeNotificationIntent(intent)
         savedInstanceState?.getString(STATE_ERROR)?.let { showError(it) }
         registerBackCallback()
-        if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 42)
         val filter = IntentFilter().apply {
             addAction(DshService.ACTION_READY)
             addAction(DshService.ACTION_ERROR)
@@ -136,11 +155,46 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        consumeNotificationIntent(intent)
         // The launcher or notification can deliver an intent to the current
         // foreground instance without calling onStart, including just after
         // the notification's Stop action terminated the local host.
         readyHostConfirmed = false
         startDsh()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        configureSystemBars()
+        publishSystemUiMode()
+        DshService.setUiForeground(true)
+    }
+
+    override fun onPause() {
+        DshService.setUiForeground(false)
+        super.onPause()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Android UiMode is authoritative for "system" even on WebViews
+        // whose CSS prefers-color-scheme is fixed by their light parent theme.
+        configureSystemBars()
+        publishSystemUiMode()
+    }
+
+    private fun consumeNotificationIntent(intent: Intent?) {
+        if (intent?.action != DshService.ACTION_OPEN_SESSION) return
+        val target = NotificationSessionTargets.tickets.take(intent.getStringExtra(NotificationSessionTargets.EXTRA_TICKET))
+        // An old OS PendingIntent may outlive the process that issued its
+        // ticket. Never silently retain a different queued session target.
+        pendingNotificationSession = target
+        if (target == null) Toast.makeText(this, R.string.notification_session_unavailable, Toast.LENGTH_LONG).show()
+        intent.removeExtra(NotificationSessionTargets.EXTRA_TICKET)
+        // Saved-instance state retains a verified pending target across
+        // recreation; the consumed Intent must not be handled a second time.
+        intent.action = null
+        intent.data = null
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -158,6 +212,7 @@ class MainActivity : Activity() {
                 insets
             }
         }
+        contentRoot = root
         webView = WebView(this).apply {
             visibility = View.INVISIBLE
             settings.javaScriptEnabled = true
@@ -166,6 +221,12 @@ class MainActivity : Activity() {
             settings.allowContentAccess = false
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
+            // DSH's real theme runtime paints its own palette. Do not let
+            // WebView additionally invert a correctly selected light UI.
+            @Suppress("DEPRECATION")
+            run { settings.forceDark = WebSettings.FORCE_DARK_OFF }
+            if (Build.VERSION.SDK_INT >= 33) settings.isAlgorithmicDarkeningAllowed = false
+            addJavascriptInterface(AndroidUiMode(applicationContext) { themeReadAllowed }, "AndroidUiMode")
             android.webkit.CookieManager.getInstance().setAcceptCookie(true)
             setDownloadListener { url, userAgent, disposition, mimeType, _ ->
                 chooseDownloadDestination(url, userAgent, disposition, mimeType)
@@ -198,6 +259,11 @@ class MainActivity : Activity() {
                 }
             }
             webViewClient = object : WebViewClient() {
+                override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                    closeThemePorts()
+                    themeReadAllowed = WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)
+                    super.onPageStarted(view, url, favicon)
+                }
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
                     if (!WebNavigation.blocksForeignLoopbackRequest(request.url.toString(), lastReadyLaunchUrl)) return null
                     // Cookies do not distinguish localhost ports. Block direct
@@ -206,6 +272,11 @@ class MainActivity : Activity() {
                         ByteArrayInputStream(ByteArray(0)))
                 }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (request.isForMainFrame && WebNavigation.isRuntimeSettingsRequest(
+                            request.url.toString(), view.url, lastReadyLaunchUrl)) {
+                        startActivity(Intent(this@MainActivity, RuntimeSettingsActivity::class.java))
+                        return true
+                    }
                     if (request.isForMainFrame && WebNavigation.isMobileControlRequest(
                             request.url.toString(), view.url, lastReadyLaunchUrl)) {
                         startActivity(Intent(this@MainActivity, MobileControlActivity::class.java))
@@ -228,6 +299,8 @@ class MainActivity : Activity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     super.onPageFinished(view, url)
                     if (!terminalError && WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)) {
+                        installThemePort(url)
+                        publishSystemUiMode()
                         downloadPageReady = true
                         awaitDshUi()
                         savePendingDownload()
@@ -262,15 +335,80 @@ class MainActivity : Activity() {
 
     @Suppress("DEPRECATION")
     private fun configureSystemBars() {
+        setTheme(AndroidAppearance.theme(this))
         window.setDecorFitsSystemWindows(false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         window.isStatusBarContrastEnforced = false
         window.isNavigationBarContrastEnforced = false
+        val colors = NativeUiColors(this)
+        val background = (getDrawable(R.drawable.dsh_launch_background)?.mutate() as? LayerDrawable)
+        if (background != null) {
+            background.setDrawable(0, ColorDrawable(colors.background))
+            window.setBackgroundDrawable(background)
+        }
+        if (::webView.isInitialized) webView.setBackgroundColor(colors.background)
+        if (::contentRoot.isInitialized && dshUiVisible) contentRoot.setBackgroundColor(colors.background)
+        val light = if (colors.dark) 0 else
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
         window.insetsController?.setSystemBarsAppearance(
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            light,
             WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
         )
+    }
+
+    private fun closeThemePorts() {
+        ++themeGeneration
+        themePorts?.forEach { runCatching { it.close() } }
+        themePorts = null
+    }
+
+    private fun installThemePort(url: String) {
+        if (!themeReadAllowed || !WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)) return
+        closeThemePorts()
+        val generation = themeGeneration
+        val ports = webView.createWebMessageChannel()
+        themePorts = ports
+        ports[0].setWebMessageCallback(object : WebMessagePort.WebMessageCallback() {
+            override fun onMessage(port: WebMessagePort?, message: WebMessage?) {
+                if (generation != themeGeneration || port !== ports[0] ||
+                    !themeReadAllowed || !WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) return
+                val data = message?.data ?: return
+                if (data.length > 256 || !message.ports.isNullOrEmpty()) return
+                val parsed = runCatching {
+                    val fields = LinkedHashMap<String, Any?>()
+                    JsonReader(StringReader(data)).use { reader ->
+                        reader.isLenient = false
+                        require(reader.peek() == JsonToken.BEGIN_OBJECT)
+                        reader.beginObject()
+                        while (reader.hasNext()) {
+                            val name = reader.nextName()
+                            require(name.length <= 32 && name !in fields && fields.size < 3)
+                            fields[name] = when (reader.peek()) {
+                                JsonToken.STRING -> reader.nextString()
+                                JsonToken.NUMBER -> reader.nextString().toLong()
+                                else -> throw IllegalArgumentException("Invalid appearance message")
+                            }
+                        }
+                        reader.endObject()
+                        require(reader.peek() == JsonToken.END_DOCUMENT)
+                    }
+                    AppearancePolicy.parse(fields, AndroidAppearance.systemDark(applicationContext))
+                }.getOrNull() ?: return
+                AndroidAppearance.adoptFromDsh(applicationContext, parsed.preference)
+                configureSystemBars()
+            }
+        })
+        val origin = Uri.parse(url).let { Uri.parse("${it.scheme}://${it.host}:${it.port}") }
+        webView.postWebMessage(WebMessage("dsh.android.theme.port.v1", arrayOf(ports[1])), origin)
+    }
+
+    private fun publishSystemUiMode() {
+        if (!::webView.isInitialized || !themeReadAllowed ||
+            !WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) return
+        val dark = AndroidAppearance.systemDark(applicationContext)
+        webView.evaluateJavascript("(function(){if(typeof window.__DSH_ANDROID_SYSTEM_UI_MODE__==='function')" +
+            "window.__DSH_ANDROID_SYSTEM_UI_MODE__($dark);})();", null)
     }
 
     /** Reveal the real application, after its own plugin boot DOM has gone away. */
@@ -290,13 +428,53 @@ class MainActivity : Activity() {
                 if (failure.isNotBlank()) {
                     showError(failure)
                 } else if (state?.optBoolean("ready") == true) {
+                    dshUiVisible = true
+                    configureSystemBars()
                     webView.visibility = View.VISIBLE
+                    openNotificationSession()
                 } else {
                     handler.postDelayed({ check() }, 200)
                 }
             }
         }
         check()
+    }
+
+    /** Select through DSH's own workspace controller, retaining each session's draft. */
+    private fun openNotificationSession() {
+        val sessionId = pendingNotificationSession ?: return
+        if (notificationNavigationPending || !readyHostConfirmed ||
+            !WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) return
+        notificationNavigationPending = true
+        val deadline = android.os.SystemClock.uptimeMillis() + 15_000
+        fun select() {
+            if (isFinishing || isDestroyed || pendingNotificationSession != sessionId) {
+                notificationNavigationPending = false
+                return
+            }
+            if (!readyHostConfirmed || !WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) {
+                notificationNavigationPending = false
+                return
+            }
+            val script = "(function(){try{return typeof window.__DSH_ANDROID_OPEN_SESSION__==='function' && " +
+                "window.__DSH_ANDROID_OPEN_SESSION__(${JSONObject.quote(sessionId)})===true;}catch(error){return false;}})();"
+            webView.evaluateJavascript(script) { result ->
+                if (isFinishing || isDestroyed) return@evaluateJavascript
+                if (pendingNotificationSession != sessionId) {
+                    notificationNavigationPending = false
+                    openNotificationSession()
+                } else if (result == "true") {
+                    pendingNotificationSession = null
+                    notificationNavigationPending = false
+                } else if (android.os.SystemClock.uptimeMillis() < deadline) handler.postDelayed({ select() }, 250)
+                else {
+                    pendingNotificationSession = null
+                    notificationNavigationPending = false
+                    Toast.makeText(this, R.string.notification_session_unavailable, Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        select()
     }
 
     private fun restoreWebState(savedInstanceState: Bundle?) {
@@ -608,9 +786,12 @@ class MainActivity : Activity() {
         outState.putBoolean(STATE_FILE_OPERATION_INTERRUPTED,
             pendingFileSelection != null || downloads.isRunning)
         outState.putBoolean(STATE_CONFIGURATION_EXPORT, pendingConfigurationExport)
+        pendingNotificationSession?.let { outState.putString(STATE_NOTIFICATION_SESSION, it) }
     }
 
     override fun onDestroy() {
+        themeReadAllowed = false
+        closeThemePorts()
         pendingDownload = null
         pendingDownloadDestination = null
         downloads.close()
@@ -630,6 +811,7 @@ class MainActivity : Activity() {
         private const val STATE_PENDING_DOWNLOAD = "dsh.pending.download"
         private const val STATE_FILE_OPERATION_INTERRUPTED = "dsh.file.operation.interrupted"
         private const val STATE_CONFIGURATION_EXPORT = "dsh.configuration.export"
+        private const val STATE_NOTIFICATION_SESSION = "dsh.notification.session"
         private const val FILE_SELECTION_REQUEST = 43
         private const val DOWNLOAD_DESTINATION_REQUEST = 44
         private const val CONFIGURATION_EXPORT_REQUEST = 45

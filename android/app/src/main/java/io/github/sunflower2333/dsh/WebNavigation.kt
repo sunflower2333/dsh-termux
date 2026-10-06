@@ -19,6 +19,7 @@ internal enum class WebNavigationDecision {
 internal object WebNavigation {
     const val CONFIGURATION_PATH = "/__dsh_android__/open-configuration"
     const val MOBILE_CONTROL_PATH = "/__dsh_android__/mobile-control"
+    const val RUNTIME_SETTINGS_PATH = "/__dsh_android__/runtime-settings"
 
     /** One native action, accepted only from the current authenticated DSH page. */
     fun isConfigurationRequest(url: String, pageUrl: String?, readyUrl: String?): Boolean {
@@ -27,6 +28,10 @@ internal object WebNavigation {
 
     fun isMobileControlRequest(url: String, pageUrl: String?, readyUrl: String?): Boolean {
         return isNativeRequest(url, pageUrl, readyUrl, MOBILE_CONTROL_PATH)
+    }
+
+    fun isRuntimeSettingsRequest(url: String, pageUrl: String?, readyUrl: String?): Boolean {
+        return isNativeRequest(url, pageUrl, readyUrl, RUNTIME_SETTINGS_PATH)
     }
 
     private fun isNativeRequest(url: String, pageUrl: String?, readyUrl: String?, path: String): Boolean {

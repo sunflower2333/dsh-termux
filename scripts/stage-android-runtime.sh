@@ -77,6 +77,11 @@ node "$ROOT_DIR/scripts/patch-android-frontend.mjs" "$WORK_DIR/staged/runtime/ds
 node "$ROOT_DIR/scripts/patch-android-attachments.mjs" "$WORK_DIR/staged/runtime/dsh"
 node "$ROOT_DIR/scripts/patch-android-settings.mjs" "$WORK_DIR/staged/runtime/dsh"
 node "$ROOT_DIR/scripts/patch-android-mobile-tools.mjs" "$WORK_DIR/staged/runtime/dsh"
+node "$ROOT_DIR/scripts/patch-android-host-events.mjs" "$WORK_DIR/staged/runtime/dsh"
+# Android cannot confine Bash to a desktop workspace. Keep DSH's file policy
+# and obtain its existing per-command approval before starting a shell.
+node "$ROOT_DIR/scripts/patch-android-sandbox.mjs" "$WORK_DIR/staged/runtime/dsh" --native-shell
+node "$ROOT_DIR/scripts/patch-android-workspace.mjs" "$WORK_DIR/staged/runtime/dsh" --native-shell
 # Keep every runtime entry, type declaration, license and plugin document.
 # JavaScript source maps are optional in DSH's client-module loader; Windows
 # PDBs and Koffi compiler objects are not inputs to the Android runtime.

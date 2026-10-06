@@ -30,8 +30,10 @@ after(async () => {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const TOKEN = randomBytes(32).toString("hex"); // Fixture credentials only, never printed.
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", "base64");
-const names = ["mobile_status", "mobile_observe", "mobile_click", "mobile_type", "mobile_swipe", "mobile_back", "mobile_stop"];
+const names = ["mobile_status", "mobile_observe", "mobile_click", "mobile_type", "mobile_swipe", "mobile_back", "mobile_stop", "mobile_list_apps", "mobile_open_app"];
 const SESSION = randomUUID();
+const APPS = [{ packageName: "com.android.settings", label: "Settings" }, { packageName: "io.github.fixture.notes", label: "Notes" }];
+function appList(sessionId = SESSION) { return { sessionId, apps: APPS, truncated: false, foregroundOnly: true }; }
 function status(active = true) { return { enabled: true, connected: true, active, sessionId: active ? SESSION : null, reason: active ? "user_grant" : "user_paused", currentPackage: "fixture.screen" }; }
 function observation(args) {
   return { sessionId: args.sessionId, observationId: randomUUID(), sampledAtMs: Date.now(), display: { widthPx: 360, heightPx: 640, rotation: 0 },
@@ -92,7 +94,7 @@ async function bridge(handler) {
 async function runtime(handler, { modalities = ["text"], android = true, modelInfoError = false } = {}) {
   const native = await bridge(handler ?? (call => {
     const action = call.path.split("/").at(-1);
-    return { ok: true, value: action === "observe" ? observation(call.args) : action === "status" || action === "stop" ? status(action !== "stop") : { performed: true, action, observationId: call.args.observationId } };
+    return { ok: true, value: action === "observe" ? observation(call.args) : action === "status" || action === "stop" ? status(action !== "stop") : action === "list_apps" ? appList(call.args.sessionId) : { performed: true, action, observationId: call.args.observationId, ...(action === "open_app" ? { packageName: call.args.packageName, foregroundOnly: true } : {}) } };
   }));
   Object.assign(process.env, native.env, { DSH_ANDROID: android ? "1" : "0" });
   const ctx = new Context();
@@ -156,7 +158,7 @@ test("APK patch uses the real web-app plugin entry, is idempotent, and preserves
   await writeFile(join(lib, "index.js"), before.replace("function apply(ctx, config) {", "function apply_changed(ctx, config) {"));
   await assert.rejects(patchAndroidMobileTools(fixture), /Unsupported/);
 });
-test("real DSH prompt/tool registry exposes all seven tools through standing preset and agent scopes without secrets", async () => {
+test("real DSH prompt/tool registry exposes all nine tools through standing preset and agent scopes without secrets", async () => {
   const r = await runtime();
   const assembly = await r.ctx.systemPrompt.assemble({ scope: r.agent });
   assert.deepEqual(assembly.tools.map(tool => tool.name).filter(name => names.includes(name)).sort(), [...names].sort());
@@ -360,6 +362,156 @@ test("native omission of clipped nodes preserves retained IDs, descriptions, act
     assert.equal(typed.isError, false, JSON.stringify(typed.error));
     assert.deepEqual(r.native.calls.at(-1).args, { ...binding, nodeId: "n30", text: "Fixture replacement" });
   }
+});
+test("launcher list is grant-bound, sorted, bounded and exposes only launcher metadata", async () => {
+  const r = await runtime(call => ({ ok: true, value: {
+    ...appList(call.args.sessionId), truncated: true,
+    apps: [{ packageName: "fixture.z", label: "Same", component: "hidden.Component" },
+      { packageName: "fixture.a", label: "Same" }, { packageName: "fixture.notes", label: "Notes" },
+      { packageName: "fixture.beta", label: "Beta" }, { packageName: "fixture.alpha", label: "alpha" }],
+  } }));
+  const result = await r.execute("mobile_list_apps", { sessionId: SESSION });
+  assert.equal(result.isError, false, JSON.stringify(result.error));
+  assert.deepEqual(result.value, { sessionId: SESSION, apps: [
+    { packageName: "fixture.alpha", label: "alpha" }, { packageName: "fixture.beta", label: "Beta" },
+    { packageName: "fixture.notes", label: "Notes" }, { packageName: "fixture.a", label: "Same" },
+    { packageName: "fixture.z", label: "Same" }], truncated: true, foregroundOnly: true });
+  assert.deepEqual(r.native.calls[0].args, { sessionId: SESSION });
+  assert.ok(!JSON.stringify(result).includes("hidden.Component"));
+  assert.ok(!JSON.stringify(result).includes(TOKEN));
+  const assembly = await r.ctx.systemPrompt.assemble({ scope: r.agent });
+  assert.match(JSON.stringify(assembly), /current foreground window only/);
+  const empty = await runtime(() => ({ ok: true, value: { ...appList(), apps: [] } }));
+  assert.equal((await empty.execute("mobile_list_apps", { sessionId: SESSION })).value.apps.length, 0);
+  for (const mutate of [
+    v => { v.apps = Array(129).fill(APPS[0]); }, v => { v.apps = [APPS[0], APPS[0]]; },
+    v => { v.sessionId = randomUUID(); }, v => { v.foregroundOnly = false; }, v => { v.truncated = 0; },
+    v => { v.apps = [{ packageName: "fixture.notes", label: "x".repeat(129) }]; },
+    v => { v.apps = [{ packageName: "fixture.notes", label: "bad\0label" }]; },
+    v => { v.apps = [{ packageName: "fixture.notes", label: "\ud800" }]; },
+    v => { v.apps = [{ packageName: "https://example.com", label: "URI" }]; },
+  ]) {
+    const invalid = await runtime(() => { const value = structuredClone(appList()); mutate(value); return { ok: true, value }; });
+    assert.equal(code(await invalid.execute("mobile_list_apps", { sessionId: SESSION })), "MOBILE_INVALID_RESPONSE");
+  }
+});
+test("listing and opening cannot bypass paused or missing native task grants", async () => {
+  for (const nativeCode of ["paused", "accessibility_disabled", "locked", "disconnected"]) {
+    const r = await runtime(call => call.path.endsWith("/observe") ? { ok: true, value: observation(call.args) } : {
+      ok: false, error: { code: nativeCode, message: TOKEN + " private detail" },
+    });
+    const listed = await r.execute("mobile_list_apps", { sessionId: SESSION });
+    assert.equal(code(listed), "MOBILE_" + nativeCode.toUpperCase());
+    assert.ok(!JSON.stringify(listed).includes(TOKEN));
+    const value = await r.observe();
+    const args = { sessionId: SESSION, observationId: value.observationId, packageName: "com.android.settings" };
+    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_" + nativeCode.toUpperCase());
+    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_STALE_OBSERVATION");
+  }
+  const r = await runtime();
+  assert.equal(code(await r.execute("mobile_list_apps", { sessionId: "" })), "MOBILE_INVALID_REQUEST");
+  assert.equal(r.native.calls.length, 0);
+});
+test("open app rejects URI/component/extra fields and invalid package names before native dispatch", async () => {
+  const r = await runtime();
+  const value = await r.observe();
+  const binding = { sessionId: SESSION, observationId: value.observationId };
+  const calls = r.native.calls.length;
+  for (const name of ["", "android", "com..app", ".com.app", "com.app.", "1com.app", "com.1app", "com.app/Activity", "https://example.com", "intent://app", "com.app?extra=1", "com.app\0", "com.app\n", "com." + "x".repeat(253)]) {
+    assert.equal(code(await r.execute("mobile_open_app", { ...binding, packageName: name })), "MOBILE_INVALID_REQUEST");
+    assert.equal(r.native.calls.length, calls);
+  }
+  for (const extra of [{ component: "com.app.Activity" }, { uri: "content://fixture" }, { intent: { action: "arbitrary" } }, { background: true }]) {
+    const result = await r.execute("mobile_open_app", { ...binding, packageName: "com.android.settings", ...extra });
+    assert.equal(result.isError, true);
+    assert.equal(r.native.calls.length, calls);
+  }
+});
+test("open app is bound to the observing agent, current session, ID and observation age", async t => {
+  const r = await runtime();
+  const value = await r.observe();
+  const args = { sessionId: SESSION, observationId: value.observationId, packageName: "com.android.settings" };
+  const count = r.native.calls.length;
+  const other = { ...r.agent, id: randomUUID() };
+  for (const [input, owner] of [[args, other], [{ ...args, observationId: randomUUID() }, r.agent], [{ ...args, sessionId: randomUUID() }, r.agent]]) {
+    assert.equal(code(await r.execute("mobile_open_app", input, undefined, owner)), "MOBILE_STALE_OBSERVATION");
+    assert.equal(r.native.calls.length, count);
+  }
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now + LIMITS.observationAgeMs + 1);
+  try {
+    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_STALE_OBSERVATION");
+    assert.equal(r.native.calls.length, count);
+  } finally { t.mock.restoreAll(); }
+});
+test("accepted launcher open requires a fresh observation before further foreground actions", async () => {
+  let opened = false;
+  const r = await runtime(call => {
+    const action = call.path.split("/").at(-1);
+    if (action === "list_apps") return { ok: true, value: appList(call.args.sessionId) };
+    if (action === "observe") {
+      const value = observation(call.args);
+      if (opened) {
+        value.window = { id: 2, packageName: "io.github.fixture.notes" };
+        value.nodes.forEach(node => { node.packageName = "io.github.fixture.notes"; });
+      }
+      return { ok: true, value };
+    }
+    if (action === "open_app") opened = true;
+    return { ok: true, value: { performed: true, action, observationId: call.args.observationId,
+      ...(action === "open_app" ? { packageName: call.args.packageName, foregroundOnly: true } : {}) } };
+  });
+  const observed = await r.observe();
+  assert.equal((await r.execute("mobile_list_apps", { sessionId: SESSION })).isError, false);
+  const args = { sessionId: SESSION, observationId: observed.observationId, packageName: "io.github.fixture.notes" };
+  const result = await r.execute("mobile_open_app", args);
+  assert.equal(result.isError, false, JSON.stringify(result.error));
+  assert.deepEqual(result.value, { performed: true, action: "open_app", observationId: observed.observationId,
+    verificationRequired: true, packageName: "io.github.fixture.notes", foregroundOnly: true });
+  assert.deepEqual(r.native.calls.at(-1).args, args);
+  assert.equal(code(await r.execute("mobile_back", { sessionId: SESSION, observationId: observed.observationId })), "MOBILE_STALE_OBSERVATION");
+  const next = await r.observe();
+  assert.deepEqual(next.window, { id: 2, packageName: "io.github.fixture.notes" });
+  assert.notEqual(next.observationId, observed.observationId);
+  assert.equal((await r.execute("mobile_click", { sessionId: SESSION, observationId: next.observationId, nodeId: "n0" })).isError, false);
+});
+test("failed or malformed launcher replies consume the observation and redact native messages", async () => {
+  for (const reply of [
+    args => ({ ok: false, error: { code: "app_not_available", message: TOKEN + " private package state" } }),
+    args => ({ ok: true, value: { performed: true, action: "open_app", observationId: args.observationId, packageName: "different.app", foregroundOnly: true } }),
+    args => ({ ok: true, value: { performed: true, action: "open_app", observationId: args.observationId, packageName: args.packageName, foregroundOnly: false } }),
+  ]) {
+    const r = await runtime(call => call.path.endsWith("/observe") ? { ok: true, value: observation(call.args) } : reply(call.args));
+    const value = await r.observe();
+    const args = { sessionId: SESSION, observationId: value.observationId, packageName: "com.android.settings" };
+    const result = await r.execute("mobile_open_app", args);
+    assert.equal(result.isError, true);
+    assert.ok(["MOBILE_APP_NOT_AVAILABLE", "MOBILE_INVALID_RESPONSE"].includes(code(result)));
+    assert.ok(!JSON.stringify(result).includes(TOKEN));
+    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_STALE_OBSERVATION");
+  }
+});
+test("launcher requests share the FIFO and queued aborted open never launches", async () => {
+  let active = 0, maximum = 0;
+  const r = await runtime(async call => {
+    active++; maximum = Math.max(maximum, active);
+    await sleep(50);
+    active--;
+    const action = call.path.split("/").at(-1);
+    return { ok: true, value: action === "observe" ? observation(call.args) : action === "list_apps" ? appList(call.args.sessionId) : status() };
+  });
+  const value = await r.observe();
+  const first = r.execute("mobile_list_apps", { sessionId: SESSION });
+  const cancel = new AbortController();
+  const second = r.execute("mobile_open_app", { sessionId: SESSION, observationId: value.observationId, packageName: "com.android.settings" }, cancel.signal);
+  const third = r.execute("mobile_list_apps", { sessionId: SESSION });
+  await sleep(10); cancel.abort();
+  const results = await Promise.all([first, second, third]);
+  assert.equal(results[0].isError, false); assert.equal(results[2].isError, false);
+  assert.equal(results[1].isError, true);
+  assert.equal(maximum, 1);
+  assert.equal(r.native.calls.some(call => call.path.endsWith("/open_app")), false);
+  assert.deepEqual(r.native.calls.map(call => call.path.split("/").at(-1)), ["observe", "list_apps", "list_apps"]);
 });
 test("bounded FIFO serializes actual UDS requests and cancels a queued call before dispatch", async () => {
   let active = 0, maximum = 0;

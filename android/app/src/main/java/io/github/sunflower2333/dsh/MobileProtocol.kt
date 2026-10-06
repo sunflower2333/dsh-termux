@@ -1,7 +1,7 @@
 package io.github.sunflower2333.dsh
 
 internal enum class MobileOperation {
-    STATUS, OBSERVE, CLICK, TYPE, SWIPE, BACK, STOP
+    STATUS, OBSERVE, CLICK, TYPE, SWIPE, BACK, STOP, LIST_APPS, OPEN_APP
 }
 
 internal sealed interface MobileCommand {
@@ -35,6 +35,8 @@ internal sealed interface MobileCommand {
     ) : MobileCommand
 
     data class Back(val sessionId: String, val observationId: String) : MobileCommand
+    data class ListApps(val sessionId: String) : MobileCommand
+    data class OpenApp(val sessionId: String, val observationId: String, val packageName: String) : MobileCommand
 
     object Stop : MobileCommand
 }
@@ -58,6 +60,8 @@ internal object MobileProtocol {
         "${PATH_PREFIX}swipe" -> MobileOperation.SWIPE
         "${PATH_PREFIX}back" -> MobileOperation.BACK
         "${PATH_PREFIX}stop" -> MobileOperation.STOP
+        "${PATH_PREFIX}list_apps" -> MobileOperation.LIST_APPS
+        "${PATH_PREFIX}open_app" -> MobileOperation.OPEN_APP
         else -> throw MobileProtocolException("unknown_operation", "Unknown mobile operation.")
     }
 
@@ -70,6 +74,8 @@ internal object MobileProtocol {
             MobileOperation.SWIPE -> sessionFields +
                 setOf("fromX", "fromY", "toX", "toY", "durationMs")
             MobileOperation.BACK -> sessionFields
+            MobileOperation.LIST_APPS -> setOf("sessionId")
+            MobileOperation.OPEN_APP -> sessionFields + "packageName"
         }
         if (fields.keys.any { it !in allowedFields }) {
             invalid("Request contains unknown fields.")
@@ -107,6 +113,9 @@ internal object MobileProtocol {
                 requireIdentifier(fields, "sessionId"),
                 requireIdentifier(fields, "observationId")
             )
+            MobileOperation.LIST_APPS -> MobileCommand.ListApps(requireIdentifier(fields, "sessionId"))
+            MobileOperation.OPEN_APP -> MobileCommand.OpenApp(requireIdentifier(fields, "sessionId"),
+                requireIdentifier(fields, "observationId"), MobileLauncherPolicy.requirePackage(fields["packageName"]))
         }
     }
 
