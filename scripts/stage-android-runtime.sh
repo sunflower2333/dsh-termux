@@ -67,6 +67,14 @@ cat > "$WORK_DIR/staged/runtime/dsh.cjs" <<'NODE_WRAPPER'
 });
 NODE_WRAPPER
 cp -a "$DSH_PACKAGE_DIR" "$WORK_DIR/staged/runtime/dsh"
+
+# Refresh the mobile layer even when the input package was staged previously.
+# WebView lowering deliberately preserves that layer, so it cannot refresh it.
+node "$ROOT_DIR/scripts/patch-android-frontend.mjs" "$WORK_DIR/staged/runtime/dsh"
+# APK-only: use the app-owned fsync boundary and atomic no-replace publication
+# without the hard links Android's untrusted_app SELinux domain forbids.
+# Patch the staging copy, never the Termux package or the input source tree.
+node "$ROOT_DIR/scripts/patch-android-attachments.mjs" "$WORK_DIR/staged/runtime/dsh"
 # Keep every runtime entry, type declaration, license and plugin document.
 # JavaScript source maps are optional in DSH's client-module loader; Windows
 # PDBs and Koffi compiler objects are not inputs to the Android runtime.

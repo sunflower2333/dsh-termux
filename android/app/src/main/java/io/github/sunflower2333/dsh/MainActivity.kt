@@ -76,6 +76,7 @@ class MainActivity : Activity() {
                     // and authentication token are still alive.
                     if (reload) {
                         downloadPageReady = false
+                        webView.visibility = View.INVISIBLE
                         webView.loadUrl(value)
                     }
                     else awaitDshUi()
@@ -93,9 +94,11 @@ class MainActivity : Activity() {
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-            WebView.setWebContentsDebuggingEnabled(true)
-        }
+        // Userdebug Android images can enable WebView debugging by default.
+        // Set both build modes explicitly before creating the WebView.
+        WebView.setWebContentsDebuggingEnabled(
+            applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
+        )
         setContentView(buildView())
         restoreWebState(savedInstanceState)
         restoreFileOperations(savedInstanceState)

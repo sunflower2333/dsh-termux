@@ -77,6 +77,7 @@ export async function patchAndroidFrontend(root) {
     ["wSkVaW", "conversation", "scrollBody"],
     ["pXSMma", "conversation", "fishHitbox"],
     ["uV2eYG", "conversation", "cardWorkspaceTrigger"],
+    ["gSkjMW", "attachment", "body"],
     ["cubgiG", "agent-preset", "seatLabel"],
     ["bVCLcG", "theme", "stepper"],
     ["_8HJdBW", "theme", "cubeRow"],

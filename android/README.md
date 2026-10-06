@@ -70,6 +70,17 @@ license is also included in APK assets.
 The launcher enables `--expose-internals` for DSH's main and Worker module
 resolvers, since its upstream native resolver helper has no Bionic support.
 The default workspace lives under the app-private Documents directory.
+The app remembers the successfully bound local port so restarting DSH preserves
+the WebView origin, current session and unsent draft. A genuine port conflict
+allows one automatic-port fallback; server-side session history stays on disk.
+Each process still supplies a fresh authenticated launch URL. The single Activity
+receives repeated launcher and notification opens without creating another view,
+and hides plugin bootstrap content during a fresh host reload.
+
+The native launcher supplies its Android App UID to attachment validation,
+because Android Node does not expose `process.getuid()`. Every checked private
+directory must have that owner, stay within the canonical app data directory,
+and contain no symbolic link. File and directory fsync barriers remain enabled.
 
 The browser bundles target Android 11's WebView 83. Pinned compatibility
 libraries load before DSH's bootstrap, with their licenses included in the
@@ -79,6 +90,14 @@ subagent links. Newer WebViews keep their native implementations. File inputs us
 Android's system document picker. Session exports use Android's Save As picker
 and retain DSH's local authentication without forwarding it through redirects.
 Rotation preserves the existing WebView and pending picker callbacks.
+Attachment persistence syncs the app-owned directory chain up to Android's
+private data directory, using canonical paths. Android 11 forbids hard links
+for app processes, so Android publishes complete files with
+`renameat2(RENAME_NOREPLACE)` and creates filename aliases by bounded copying.
+File and directory sync, atomic publication without overwriting existing files,
+and digest-verified deduplication remain enabled. Termux keeps its original
+hard-link publication. Attachment filenames are bounded
+and leave a separate 44px area for the Remove button.
 When the keyboard leaves a short viewport, the chat header and composer use a
 compact layout while keeping Chat, Trajectory and the workspace panel available.
 Attachment menus fit inside the actual conversation area and scroll their

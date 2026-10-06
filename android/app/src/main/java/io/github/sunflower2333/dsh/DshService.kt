@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.Context
 import android.graphics.drawable.Icon
 import android.os.IBinder
 import android.os.Handler
@@ -20,6 +21,8 @@ class DshService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val launchScheduled = AtomicBoolean(false)
     private val terminationScheduled = AtomicBoolean(false)
+    private val processLock = Any()
+    private val hostPreferences by lazy { getSharedPreferences(HostPortPolicy.PREFERENCE_FILE, Context.MODE_PRIVATE) }
     private val main = Handler(Looper.getMainLooper())
     private var latestStartId = 0
     private var restartRequested = false
@@ -105,26 +108,31 @@ class DshService : Service() {
             check(entrypoint.isFile && (entrypoint.path == runtimeRoot.path || entrypoint.path.startsWith(runtimeRoot.path + File.separator))) {
                 "missing runtime entrypoint ${manifest.entrypoint}"
             }
-            val args = buildList {
+            val rememberedPort = runCatching {
+                hostPreferences.getInt(HostPortPolicy.PREFERENCE_PORT, 0)
+            }.getOrDefault(0)
+            val plan = HostPortPolicy.plan(manifest.arguments, rememberedPort)
+            val commandPrefix = buildList {
                 add(executable.absolutePath)
                 // The Android runtime bridge uses Node's real internal APIs.
                 add("--expose-internals")
                 // Keep the path relative to the extracted runtime root. This
                 // allows DSH to resolve its package-relative imports.
                 add(entrypoint.relativeTo(runtimeRoot).path)
-                addAll(manifest.arguments)
             }
-            val builder = ProcessBuilder(args)
+            val builder = ProcessBuilder(commandPrefix + plan.arguments)
                 .directory(runtime)
                 .redirectErrorStream(true)
             builder.environment()["DSH_ANDROID"] = "1"
+            builder.environment()["DSH_ANDROID_DURABLE_ROOT"] = File(applicationInfo.dataDir).canonicalPath
+            builder.environment()["DSH_ANDROID_APP_UID"] = android.os.Process.myUid().toString()
             builder.environment()["DSH_WEB_HOST"] = manifest.host
             builder.environment()["SHELL"] = File(commands, "bash").absolutePath
             val home = File(filesDir, "dsh-home").apply { mkdirs() }
             val documents = File(filesDir, "Documents").apply { mkdirs() }
             builder.environment()["DSH_ANDROID_DOCUMENTS_DIR"] = documents.absolutePath
             val temp = cacheDir.resolve("dsh-tmp").apply { mkdirs() }
-            builder.environment()["HOME"] = home.absolutePath
+            builder.environment()["HOME"] = home.canonicalPath
             builder.environment()["TMPDIR"] = temp.absolutePath
             builder.environment()["XDG_CONFIG_HOME"] = File(home, ".config").apply { mkdirs() }.absolutePath
             builder.environment()["XDG_CACHE_HOME"] = File(cacheDir, "dsh-cache").apply { mkdirs() }.absolutePath
@@ -132,38 +140,90 @@ class DshService : Service() {
             builder.environment()["ESBUILD_BINARY_PATH"] = File(nativeDir, "libdsh_esbuild.so").absolutePath
             builder.environment()["LD_LIBRARY_PATH"] = listOf(nativeDir, builder.environment()["LD_LIBRARY_PATH"]).filterNotNull().joinToString(File.pathSeparator)
             builder.environment()["PATH"] = listOf(commands.absolutePath, nativeDir, "/system/bin", "/system/xbin").joinToString(File.pathSeparator)
-            val child = builder.start().also { launchedChild = it }
-            process = child
-            if (stopping) {
-                terminateProcess(child)
-                return
-            }
-            InputStreamReader(child.inputStream).use { reader ->
-                StartupDiagnostics.readLines(reader) { line ->
-                    broadcast(ACTION_LOG, diagnostics.append(line))
-                    // DSH emits the local URL on startup. Validate it before exposing it to WebView.
-                    val candidate = if (currentUrl == null) extractReadyUrl(line) else null
-                    if (candidate != null && LocalUrl.isAllowed(candidate, manifest.webPath)) {
-                        currentUrl = candidate
-                        broadcast(ACTION_READY, candidate)
-                        updateNotification(getString(R.string.running_status))
+            var attemptArguments = plan.arguments
+            var fallbackUsed = false
+            while (true) {
+                check(!stopping && !destroyed && !Thread.currentThread().isInterrupted) { "DSH start cancelled" }
+                // The previous attempt, if any, is already gone and no longer
+                // exposed to Stop. A late Stop holding its old Process cannot
+                // consume this child's termination flag (see processLock).
+                synchronized(processLock) { terminationScheduled.set(false) }
+                val child = builder.command(commandPrefix + attemptArguments).start()
+                launchedChild = child
+                synchronized(processLock) { process = child }
+                if (stopping || destroyed || Thread.currentThread().isInterrupted) {
+                    terminateProcess(child)
+                    return
+                }
+                var readySeen = false
+                var bindConflict = false
+                InputStreamReader(child.inputStream).use { reader ->
+                    StartupDiagnostics.readLines(reader) { line ->
+                        val safeLine = diagnostics.append(line)
+                        broadcast(ACTION_LOG, safeLine)
+                        if (!readySeen && !fallbackUsed && HostPortPolicy.isBindConflict(safeLine, plan.rememberedPort)) {
+                            bindConflict = true
+                        }
+                        val candidate = if (!readySeen && !stopping && !destroyed) extractReadyUrl(line) else null
+                        val readyPort = candidate?.let { HostPortPolicy.readyPort(it, manifest.webPath) }
+                        if (candidate != null && readyPort != null) {
+                            readySeen = true
+                            if (!stopping && !destroyed && process === child && child.isAlive) {
+                                // Persist only the port. The complete new URL,
+                                // including its fresh token, stays in memory.
+                                val remembered = hostPreferences.edit()
+                                    .putInt(HostPortPolicy.PREFERENCE_PORT, readyPort).commit()
+                                if (!remembered) {
+                                    val warning = diagnostics.append("Could not remember the DSH HTTP port")
+                                    broadcast(ACTION_LOG, warning)
+                                }
+                                // READY and Stop are serialized on Android's
+                                // main thread, including after the disk write.
+                                main.post {
+                                    synchronized(processLock) {
+                                        if (!stopping && !destroyed && !launchFinishing && process === child && child.isAlive) {
+                                            currentUrl = candidate
+                                            broadcast(ACTION_READY, candidate)
+                                            updateNotification(getString(R.string.running_status))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            val exitCode = child.waitFor()
-            if (!stopping) {
-                reportError(getString(R.string.process_exit_error, exitCode), diagnostics)
-                broadcast(ACTION_EXITED, exitCode.toString())
+                val exitCode = child.waitFor()
+                if (HostPortPolicy.retryAutomaticPort(plan.rememberedPort, fallbackUsed, readySeen,
+                        exitCode, bindConflict, stopping || destroyed || Thread.currentThread().isInterrupted)) {
+                    // Do not set launchFinishing or schedule another worker:
+                    // this single worker owns both bounded attempts.
+                    awaitProcessExit(child)
+                    synchronized(processLock) {
+                        if (process === child) process = null
+                        currentUrl = null
+                    }
+                    launchedChild = null
+                    fallbackUsed = true
+                    attemptArguments = manifest.arguments
+                    continue
+                }
+                if (!stopping && !destroyed) {
+                    reportError(getString(R.string.process_exit_error, exitCode), diagnostics)
+                    broadcast(ACTION_EXITED, exitCode.toString())
+                }
+                return
             }
         } catch (error: Throwable) {
-            if (!stopping) reportError(error.message ?: error::class.java.simpleName, diagnostics)
+            if (!stopping && !destroyed) reportError(error.message ?: error::class.java.simpleName, diagnostics)
         } finally {
             launchFinishing = true
             // Cleanup also covers exceptions while consuming output or
             // publishing readiness, before the normal waitFor() path.
             launchedChild?.let(::awaitProcessExit)
-            process = null
-            currentUrl = null
+            synchronized(processLock) {
+                process = null
+                currentUrl = null
+            }
         }
     }
 
@@ -187,7 +247,11 @@ class DshService : Service() {
     }
 
     private fun terminateProcess(child: Process) {
-        if (!terminationScheduled.compareAndSet(false, true)) return
+        synchronized(processLock) {
+            // Stop may have captured an old child just before attempt cleanup.
+            // Only the currently owned live child can consume its flag.
+            if (process !== child || !child.isAlive || !terminationScheduled.compareAndSet(false, true)) return
+        }
         // DSH handles SIGTERM by disposing managed Bash processes and PTYs.
         // Give that cleanup time to run without blocking Android's main thread.
         runCatching { child.destroy() }

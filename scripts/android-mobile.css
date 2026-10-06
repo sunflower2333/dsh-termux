@@ -280,6 +280,30 @@
     min-height: 44px !important;
     flex-shrink: 0 !important;
   }
+  /* A failed file uses a native button as its body. WebView 83 aligns that
+     button's children at their intrinsic width; stretch and bound the labels
+     in both file states, with space for the always-visible 44px Remove. */
+  [data-composer-card] .gSkjMW_body {
+    min-width: 0 !important;
+    align-items: stretch !important;
+    flex-shrink: 1 !important;
+    margin-right: 44px !important;
+    padding-right: 0 !important;
+  }
+  [data-composer-card] .gSkjMW_name,
+  [data-composer-card] .gSkjMW_meta {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  [data-composer-card] .gSkjMW_name { padding-right: 0 !important; }
+  /* Android WebView may report a fine pointer without hover support. Keep
+     Remove visible on ready files without requiring a desktop hover. */
+  [data-composer-card] .gSkjMW_remove {
+    opacity: 1 !important;
+    transition: none !important;
+  }
   button[role="switch"] {
     width: 44px !important;
     height: 44px !important;

@@ -76,14 +76,17 @@ jobs:
           set -euo pipefail
           bash scripts/build-termux.sh
 
-      - name: Build the arm64 Node Android runtime
-        shell: bash
-        env:
-          JOBS: 4
-        run: |
-          set -euo pipefail
-          bash scripts/build-android-node.sh
+      # Restore only final source archives; the Bash script verifies them again.
+      - name: Restore verified Bash source archives
+        id: bash-source-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            build-bash-android/downloads/bash-5.3.tar.gz
+            build-bash-android/downloads/bash_5.3.orig.tar.xz
+          key: dsh-bash-5.3-source-v1-${{ hashFiles('scripts/build-android-bash.sh') }}
 
+      # Termux must finish first because it recreates dist/.
       - name: Build the arm64 Bash Android runtime
         shell: bash
         env:
@@ -92,6 +95,24 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/build-android-bash.sh
+
+      - name: Save verified Bash source archives
+        if: ${{ success() && steps.bash-source-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            build-bash-android/downloads/bash-5.3.tar.gz
+            build-bash-android/downloads/bash_5.3.orig.tar.xz
+          key: ${{ steps.bash-source-cache.outputs.cache-primary-key }}
+
+      # Resolve and build Bash before spending hours compiling Node.
+      - name: Build the arm64 Node Android runtime
+        shell: bash
+        env:
+          JOBS: 4
+        run: |
+          set -euo pipefail
+          bash scripts/build-android-node.sh
 
       - name: Stage the Android runtime bundle
         shell: bash
