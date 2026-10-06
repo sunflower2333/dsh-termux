@@ -103,6 +103,25 @@
   html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_searchSlot,
   html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_headerActions,
   html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) .bhn1Oq_search { transition: none !important; }
+  /* Workspace and session menus need a visible touch entry. Their original
+     rowActions spans otherwise appear only on desktop hover. Use the real
+     row keys and CSS-module suffix, retaining the original menu callbacks. */
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) [data-slot="sidebar.workspaces"] [data-row-key^="workspace:"],
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) [data-slot="sidebar.workspaces"] [data-row-key^="session:"] {
+    height: auto !important;
+    min-height: 48px !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) [data-slot="sidebar.workspaces"] [data-row-key^="workspace:"] > [class$="_rowActions"],
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) [data-slot="sidebar.workspaces"] [data-row-key^="session:"] > [class$="_rowActions"] {
+    display: inline-flex !important;
+    height: auto !important;
+    min-height: 44px !important;
+    flex: none !important;
+    gap: 0 !important;
+  }
+  html[data-dsh-android-native] .hHd-Xa_root:not(.hHd-Xa_collapsed) [data-slot="sidebar.workspaces"] [data-row-key] > [class$="_rowActions"] > * + * {
+    margin-left: 4px !important;
+  }
   .hHd-Xa_root.hHd-Xa_collapsed {
     flex-direction: row !important;
     align-items: center !important;

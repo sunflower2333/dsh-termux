@@ -13,7 +13,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
@@ -230,12 +229,7 @@ class MobileControlActivity : Activity() {
         window.navigationBarColor = Color.TRANSPARENT
         window.isStatusBarContrastEnforced = false
         window.isNavigationBarContrastEnforced = false
-        val light = if (colors.dark) 0 else
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(
-            light,
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-        )
+        SystemBarAppearance.apply(window, colors.dark)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()

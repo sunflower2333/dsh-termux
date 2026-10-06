@@ -18,7 +18,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -182,10 +181,7 @@ class RuntimeSettingsActivity : Activity() {
         window.setDecorFitsSystemWindows(false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
-        val light = if (colors.dark) 0 else
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(light,
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+        SystemBarAppearance.apply(window, colors.dark)
     }
 
     companion object { private const val NOTIFICATIONS_REQUEST = 46 }

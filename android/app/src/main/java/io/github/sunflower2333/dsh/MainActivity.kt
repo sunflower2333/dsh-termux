@@ -24,7 +24,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.URLUtil
@@ -349,12 +348,7 @@ class MainActivity : Activity() {
         }
         if (::webView.isInitialized) webView.setBackgroundColor(colors.background)
         if (::contentRoot.isInitialized && dshUiVisible) contentRoot.setBackgroundColor(colors.background)
-        val light = if (colors.dark) 0 else
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(
-            light,
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-        )
+        SystemBarAppearance.apply(window, colors.dark)
     }
 
     private fun closeThemePorts() {
