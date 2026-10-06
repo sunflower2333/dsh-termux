@@ -10,7 +10,9 @@ Only unexpired, non-Secure root cookies for this exact loopback origin are used;
 cookie contents are never printed, stored in test state, or sent to the relay.
 Use prepare, then run with a reviewed safe local prompt, then cleanup. The
 temporary session/history is retained. Existing sessions, selected models,
-credentials, access modes, and global policy are never changed. Credentials APIs
+credentials, access modes, and global policy are preserved. Model selection also
+saves a global default upstream; the original selection is saved and restored
+before removing the temporary provider. Credentials APIs
 write/remove only the newly generated relay reference; no key is read back.
 
 The report proves DSH's real tool loop; native screen/action evidence is collected
@@ -244,6 +246,51 @@ def provider_profile(control, ref):
     }
 
 
+def original_default(catalog):
+    """Capture only restorable model metadata before any test mutation."""
+    value = catalog.get("default") if isinstance(catalog, dict) else None
+    require(isinstance(value, dict) and {"provider", "model"} <= set(value)
+            and set(value) <= {"provider", "model", "reasoningEffort"}, "original-default-selection-required")
+    require(all(isinstance(item, str) and 0 < len(item) <= 512
+                and not any(ord(character) < 32 or ord(character) == 127 for character in item)
+                for item in value.values()), "original-default-selection-invalid")
+    groups = catalog.get("groups", [])
+    models = [model for group in groups if isinstance(group, dict) and group.get("id") == value["provider"]
+              for model in group.get("models", []) if isinstance(model, dict) and model.get("id") == value["model"]]
+    require(len(models) == 1, "original-default-model-not-routable")
+    reasoning = models[0].get("reasoning") or {}
+    if "reasoningEffort" in value:
+        require(any(isinstance(effort, dict) and effort.get("id") == value["reasoningEffort"]
+                    for effort in reasoning.get("efforts", [])), "original-default-reasoning-invalid")
+    else:
+        # selectModel resolves omitted reasoning to the catalog default. Such a
+        # selection cannot restore an originally absent value exactly.
+        require(not reasoning.get("defaultEffort"), "original-default-not-exactly-restorable")
+    return dict(value)
+
+
+def restore_default(client, state):
+    """Restore through the owned SID; keep provider/ref until restoration settles."""
+    selection = state.get("baseline_default_selection")
+    require(isinstance(selection, dict) and {"provider", "model"} <= set(selection)
+            and set(selection) <= {"provider", "model", "reasoningEffort"}
+            and all(isinstance(value, str) and value for value in selection.values())
+            and digest(selection) == state["baseline_default"], "original-default-snapshot-invalid")
+    if state.get("session_id"):
+        selected = client.rpc("session/selectModel", {"request": {"sessionId": state["session_id"], **selection}})
+        require(isinstance(selected, dict) and digest(selected.get("selected")) == state["baseline_default"],
+                "original-default-restore-selection-mismatch")
+    deadline = time.monotonic() + 15
+    while True:
+        current = client.rpc("session/modelCatalog", {})
+        default_matches = isinstance(current, dict) and digest(current.get("default")) == state["baseline_default"]
+        settings_match = settings_fingerprints(client.settings(), omit_provider=state["provider"]) == state["baseline_settings"]
+        if default_matches and settings_match:
+            return
+        require(time.monotonic() < deadline, "original-default-restore-timeout")
+        time.sleep(0.25)
+
+
 def prepare(client, args):
     require(not args.state_file.exists(), "test-state-already-exists")
     control = json.loads(load_private(args.relay_control))
@@ -255,32 +302,42 @@ def prepare(client, args):
     views = client.settings()
     namespace = next((item for item in views if item["ns"] == NS), None)
     require(namespace is not None and provider not in namespace["value"].get("providers", {}), "test-provider-collision")
+    selection = original_default(client.rpc("session/modelCatalog", {}))
+    sessions = client.sessions()
+    # Unattached sessions without cwd are deliberately hidden by session/list;
+    # refuse before mutation rather than falsely report them deleted later.
+    require(all(isinstance(item.get("cwd"), str) and item["cwd"] for item in sessions),
+            "baseline-session-cwd-required")
     profile = provider_profile(control, ref)
     state = {"version": 1, "provider": provider, "credential_ref": ref, "model": MODEL,
              "max_requests": control["max_requests"], "max_tokens": control["max_tokens"],
              "metadata_file": control["metadata_file"], "session_id": None,
              "baseline_settings": settings_fingerprints(views),
-             "baseline_default": digest(client.rpc("session/modelCatalog", {})["default"]),
-             "baseline_sessions": sorted(digest(item["sessionId"]) for item in client.sessions()),
+             "baseline_default": digest(selection), "baseline_default_selection": selection,
+             "baseline_sessions": sorted(digest(item["sessionId"]) for item in sessions),
              "profile_digest": None, "phase": "preparing"}
     # Save recovery identities before any mutation; no NIM or relay key is saved.
     save_private(args.state_file, state, exclusive=True)
-    client.rpc("credentials/set", {"ref": ref, "value": control["relay_token"]})
-    view = client.mutate(namespace, {"op": "set", "path": ["providers", provider], "value": profile})
-    state["profile_digest"] = digest(view["value"]["providers"][provider])
-    save_private(args.state_file, state)
-    request = {}
-    if args.agent_preset:
-        request["agentPreset"] = args.agent_preset
-    created = client.rpc("session/create", {"request": request})
-    state["session_id"] = created["sessionId"]
-    save_private(args.state_file, state)
-    client.rpc("session/rename", {"request": {"sessionId": state["session_id"], "title": "Android NIM mobile acceptance test"}})
-    client.rpc("session/selectModel", {"request": {"sessionId": state["session_id"], "provider": provider, "model": MODEL}})
-    state["phase"] = "prepared"
-    save_private(args.state_file, state)
-    print(json.dumps({"phase": "prepared", "model": MODEL, "max_tokens": state["max_tokens"],
-                      "max_requests": state["max_requests"], "existing_sessions_untouched": True}))
+    try:
+        client.rpc("credentials/set", {"ref": ref, "value": control["relay_token"]})
+        view = client.mutate(namespace, {"op": "set", "path": ["providers", provider], "value": profile})
+        state["profile_digest"] = digest(view["value"]["providers"][provider])
+        save_private(args.state_file, state)
+        request = {}
+        if args.agent_preset:
+            request["agentPreset"] = args.agent_preset
+        created = client.rpc("session/create", {"request": request})
+        state["session_id"] = created["sessionId"]
+        save_private(args.state_file, state)
+        client.rpc("session/rename", {"request": {"sessionId": state["session_id"], "title": "Android NIM mobile acceptance test"}})
+        client.rpc("session/selectModel", {"request": {"sessionId": state["session_id"], "provider": provider, "model": MODEL}})
+        state["phase"] = "prepared"
+        save_private(args.state_file, state)
+        print(json.dumps({"phase": "prepared", "model": MODEL, "max_tokens": state["max_tokens"],
+                          "max_requests": state["max_requests"], "existing_sessions_untouched": True}))
+    except BaseException:
+        cleanup(client, args)
+        raise
 
 
 def summarize_records(records):
@@ -367,6 +424,7 @@ def cleanup(client, args):
             and state.get("credential_ref", "").startswith("DSH_TEST_NIM_RELAY_"), "invalid-test-state")
     if state.get("session_id") and any(item["sessionId"] == state["session_id"] and item.get("running") for item in client.sessions()):
         client.rpc("session/cancel", {"request": {"sessionId": state["session_id"]}})
+    restore_default(client, state)
     view = client.ns()
     profile = view["value"].get("providers", {}).get(state["provider"])
     if profile is not None:
@@ -379,7 +437,8 @@ def cleanup(client, args):
     state["phase"] = "cleaned"
     save_private(args.state_file, state)
     print(json.dumps({"phase": "cleaned", "test_provider_removed": True, "test_credential_removed": True,
-                      "test_session_retained": bool(state.get("session_id")), "baseline_settings_preserved": True}))
+                      "test_session_retained": bool(state.get("session_id")), "baseline_settings_preserved": True,
+                      "original_default_restored": True}))
 
 
 def main():
