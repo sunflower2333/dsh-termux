@@ -75,6 +75,8 @@ node "$ROOT_DIR/scripts/patch-android-frontend.mjs" "$WORK_DIR/staged/runtime/ds
 # without the hard links Android's untrusted_app SELinux domain forbids.
 # Patch the staging copy, never the Termux package or the input source tree.
 node "$ROOT_DIR/scripts/patch-android-attachments.mjs" "$WORK_DIR/staged/runtime/dsh"
+# File tools need the same atomic no-replace publication on Android.
+node "$ROOT_DIR/scripts/patch-android-filesystem.mjs" "$WORK_DIR/staged/runtime/dsh"
 node "$ROOT_DIR/scripts/patch-android-settings.mjs" "$WORK_DIR/staged/runtime/dsh"
 node "$ROOT_DIR/scripts/patch-android-mobile-tools.mjs" "$WORK_DIR/staged/runtime/dsh"
 node "$ROOT_DIR/scripts/patch-android-host-events.mjs" "$WORK_DIR/staged/runtime/dsh"

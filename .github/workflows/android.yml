@@ -84,6 +84,12 @@ jobs:
           node scripts/test-android-mobile-tools.mjs "$package_dir"
           node scripts/test-android-host-events.mjs "$package_dir"
           node scripts/test-android-sandbox.mjs "$package_dir"
+          # The Termux package contains an Android ARM64 Koffi binding. Verify
+          # real libc publication with an isolated HOST binding of the same version.
+          host_fs_dir="$RUNNER_TEMP/dsh-android-filesystem-host"
+          koffi_version="$(node -p 'require(process.argv[1]).version' "$package_dir/node_modules/koffi/package.json")"
+          npm install --prefix "$host_fs_dir" --ignore-scripts --include=optional --no-audit --no-fund "koffi@$koffi_version"
+          node scripts/test-android-filesystem.mjs "$package_dir" "$host_fs_dir/node_modules/koffi"
           node scripts/test-android-workspace.mjs "$package_dir"
 
       # Restore only final source archives; the Bash script verifies them again.
