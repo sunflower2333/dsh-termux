@@ -22,6 +22,8 @@ class DshService : Service() {
     private val launchScheduled = AtomicBoolean(false)
     private val terminationScheduled = AtomicBoolean(false)
     private val processLock = Any()
+    private val mobileBridgeLock = Any()
+    private var mobileBridge: MobileBridge? = null
     private val hostPreferences by lazy { getSharedPreferences(HostPortPolicy.PREFERENCE_FILE, Context.MODE_PRIVATE) }
     private val main = Handler(Looper.getMainLooper())
     private var latestStartId = 0
@@ -41,10 +43,19 @@ class DshService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         latestStartId = startId
+        if (intent?.action == ACTION_MOBILE_PAUSE) {
+            MobileUseController.pause("user_paused")
+            if (!launchScheduled.get() && process == null) {
+                stopSelfResult(startId)
+                return START_NOT_STICKY
+            }
+            return if (stopping) START_NOT_STICKY else START_STICKY
+        }
         if (intent?.action == ACTION_STOP) {
             restartRequested = false
             stopping = true
             currentUrl = null
+            closeMobileBridge()
             process?.let(::terminateProcess)
             // Interrupt cold extraction, but keep this Service until the
             // launch worker and any old Node have really finished. A START
@@ -96,6 +107,7 @@ class DshService : Service() {
     private fun launchDsh() {
         val diagnostics = StartupDiagnostics(File(cacheDir, "dsh-startup.log"))
         var launchedChild: Process? = null
+        var launchedBridge: MobileBridge? = null
         try {
             val manifest = RuntimeInstaller.loadManifest(this)
             val runtime = RuntimeInstaller.ensureInstalled(this, manifest)
@@ -123,6 +135,19 @@ class DshService : Service() {
             val builder = ProcessBuilder(commandPrefix + plan.arguments)
                 .directory(runtime)
                 .redirectErrorStream(true)
+            val mobileCredentials = synchronized(mobileBridgeLock) {
+                check(!stopping && !destroyed) { "DSH start cancelled" }
+                val bridge = MobileBridge(this)
+                val credentials = try { bridge.start() } catch (error: Throwable) {
+                    bridge.close()
+                    throw error
+                }
+                launchedBridge = bridge
+                mobileBridge = bridge
+                credentials
+            }
+            builder.environment()["DSH_ANDROID_MOBILE_SOCKET"] = mobileCredentials.socketName
+            builder.environment()["DSH_ANDROID_MOBILE_TOKEN"] = mobileCredentials.token
             builder.environment()["DSH_ANDROID"] = "1"
             builder.environment()["DSH_ANDROID_DURABLE_ROOT"] = File(applicationInfo.dataDir).canonicalPath
             builder.environment()["DSH_ANDROID_APP_UID"] = android.os.Process.myUid().toString()
@@ -203,6 +228,7 @@ class DshService : Service() {
                         currentUrl = null
                     }
                     launchedChild = null
+                    MobileUseController.pause("host_started")
                     fallbackUsed = true
                     attemptArguments = manifest.arguments
                     continue
@@ -217,6 +243,7 @@ class DshService : Service() {
             if (!stopping && !destroyed) reportError(error.message ?: error::class.java.simpleName, diagnostics)
         } finally {
             launchFinishing = true
+            closeMobileBridge(launchedBridge)
             // Cleanup also covers exceptions while consuming output or
             // publishing readiness, before the normal waitFor() path.
             launchedChild?.let(::awaitProcessExit)
@@ -239,11 +266,22 @@ class DshService : Service() {
         destroyed = true
         restartRequested = false
         stopping = true
+        closeMobileBridge()
         process?.let(::terminateProcess)
         executor.shutdownNow()
         main.removeCallbacksAndMessages(null)
         broadcast(ACTION_EXITED, "stopped")
         super.onDestroy()
+    }
+
+    /** Stop accepts no further phone actions while Node finishes its cleanup. */
+    private fun closeMobileBridge(expected: MobileBridge? = null) {
+        synchronized(mobileBridgeLock) {
+            if (expected != null && mobileBridge !== expected) return
+            mobileBridge?.close()
+            mobileBridge = null
+            MobileUseController.pause("host_stopped")
+        }
     }
 
     private fun terminateProcess(child: Process) {
@@ -296,12 +334,17 @@ class DshService : Service() {
             Intent(this, DshService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val pause = PendingIntent.getService(
+            this, 2, Intent(this, DshService::class.java).setAction(ACTION_MOBILE_PAUSE),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_service)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
             .setContentIntent(open)
+            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), getString(R.string.mobile_use_pause), pause).build())
             .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), getString(R.string.stop), stop).build())
             .build()
     }
@@ -317,6 +360,7 @@ class DshService : Service() {
         const val INTERNAL_PERMISSION = "io.github.sunflower2333.dsh.permission.INTERNAL"
         const val ACTION_START = "io.github.sunflower2333.dsh.START"
         const val ACTION_STOP = "io.github.sunflower2333.dsh.STOP"
+        const val ACTION_MOBILE_PAUSE = "io.github.sunflower2333.dsh.MOBILE_PAUSE"
         const val ACTION_READY = "io.github.sunflower2333.dsh.READY"
         const val ACTION_LOG = "io.github.sunflower2333.dsh.LOG"
         const val ACTION_ERROR = "io.github.sunflower2333.dsh.ERROR"

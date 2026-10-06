@@ -76,6 +76,7 @@ node "$ROOT_DIR/scripts/patch-android-frontend.mjs" "$WORK_DIR/staged/runtime/ds
 # Patch the staging copy, never the Termux package or the input source tree.
 node "$ROOT_DIR/scripts/patch-android-attachments.mjs" "$WORK_DIR/staged/runtime/dsh"
 node "$ROOT_DIR/scripts/patch-android-settings.mjs" "$WORK_DIR/staged/runtime/dsh"
+node "$ROOT_DIR/scripts/patch-android-mobile-tools.mjs" "$WORK_DIR/staged/runtime/dsh"
 # Keep every runtime entry, type declaration, license and plugin document.
 # JavaScript source maps are optional in DSH's client-module loader; Windows
 # PDBs and Koffi compiler objects are not inputs to the Android runtime.

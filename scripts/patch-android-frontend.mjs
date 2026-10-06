@@ -161,6 +161,78 @@ async function patchNavigationControllers(root) {
   ]);
 }
 
+async function patchMobileUseSettings(root) {
+  const filename = join(root, "node_modules/@deepseek-ai/dsh-client-ui-settings-general/lib/client.js");
+  let source = await readFile(filename, "utf8");
+  const marker = "/* dsh-android-mobile-use-settings-v1 */";
+  const route = "/__dsh_android__/mobile-control";
+  if (source.includes(marker)) {
+    for (const anchor of [marker, 'function AndroidMobileUseSection({ t }) {',
+      'id: "android-mobile-use",', `window.location.assign("${route}")`]) {
+      if (source.split(anchor).length !== 2) {
+        throw new Error(`dsh Android UI patch: damaged Mobile use settings (${anchor})`);
+      }
+    }
+    return;
+  }
+  const updates = [
+    ['    function GeneralSection({ renderSlot }) {', `    function AndroidMobileUseSection({ t }) {
+      return (0, react_jsx_runtime.jsxs)("section", {
+        "data-dsh-android-mobile-use": "",
+        "aria-label": t("mobileUse.nav"),
+        style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 16 },
+        children: [
+          (0, react_jsx_runtime.jsx)("h2", {
+            style: { margin: 0, fontSize: 18, lineHeight: "26px", fontWeight: 600 },
+            children: t("mobileUse.nav")
+          }),
+          (0, react_jsx_runtime.jsx)("p", {
+            style: { margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--dsw-alias-label-secondary)" },
+            children: t("mobileUse.description")
+          }),
+          (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+            variant: "outline",
+            size: "sm",
+            style: { minHeight: 44, maxWidth: "100%", whiteSpace: "normal" },
+            onClick: () => window.location.assign("${route}"),
+            children: t("mobileUse.open")
+          })
+        ]
+      });
+    }
+    function GeneralSection({ renderSlot }) {`],
+    ['    const zh = {', `    const zh = {
+      "mobileUse.nav": "手机操作",
+      "mobileUse.description": "查看手机控制状态，打开系统无障碍设置，并手动允许或暂停本次手机控制。开启无障碍服务不会自动允许控制。",
+      "mobileUse.open": "打开手机控制设置",`],
+    ['    const en = {', `    const en = {
+      "mobileUse.nav": "Mobile use",
+      "mobileUse.description": "View phone control status, open Android Accessibility settings, and allow or pause control for this session. Enabling the service does not allow control automatically.",
+      "mobileUse.open": "Open phone control settings",`],
+    ['      ctx.slots.inject("settings.section", () => ctx.slots.register({\n        name: "settings.section",\n        id: "general",', `      if (window.DshAndroidNavigation) ctx.slots.inject("settings.section", () => ctx.slots.register({
+        name: "settings.section",
+        id: "android-mobile-use",
+        order: 5,
+        label: () => t("mobileUse.nav"),
+        locale: NS
+      }, AndroidMobileUseSection));
+      ctx.slots.inject("settings.section", () => ctx.slots.register({
+        name: "settings.section",
+        id: "general",`],
+  ];
+  // Match the production SettingsGeneral module and write only after all
+  // anchors pass. An upstream refactor must fail rather than silently add a
+  // detached or duplicate settings entry. No host API result grants access.
+  for (const [anchor, replacement] of updates) {
+    if (source.split(anchor).length !== 2) {
+      throw new Error(`dsh Android UI patch: unsupported Mobile use settings anchor (${anchor.slice(0, 90)})`);
+    }
+    source = source.replace(anchor, replacement);
+  }
+  await writeFile(filename, `${marker}\n${source}`);
+  console.log("patched: dsh Android UI: native Mobile use settings section");
+}
+
 /** Refresh only the mobile layer, including packages with the older marker. */
 export async function patchAndroidFrontend(root, { nativeShell = false } = {}) {
   const dist = join(root, "node_modules/@deepseek-ai/dsh-web-frontend/dist");
@@ -176,6 +248,7 @@ export async function patchAndroidFrontend(root, { nativeShell = false } = {}) {
       await readFile(new URL("./android-mobile-navigation.js", import.meta.url), "utf8"));
     await patchSharedPrimitives(dist, index);
     await patchNavigationControllers(root);
+    await patchMobileUseSettings(root);
   }
   const candidates = [...index.matchAll(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/g)]
     .map(match => match[1]).filter(href => /(?:^|\/)index-[^/]+\.css$/.test(href));

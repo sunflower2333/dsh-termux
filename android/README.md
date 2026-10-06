@@ -31,6 +31,48 @@ checks can be run from the repository root with a prepared DSH package:
 node scripts/test-android-settings.mjs /path/to/dsh-package
 ```
 
+## Mobile use
+
+DSH's Settings page includes a **Mobile use** tab that opens native controls.
+Enable **DSH phone control** in Android Accessibility Settings, then return and
+choose **Allow this task**. Enabling the accessibility service alone leaves
+control paused. The native page, notification's **Pause control** action, and
+`mobile_stop` revoke the current grant. DSH host restarts, service disconnects,
+and a locked display require another native grant.
+
+The APK registers `mobile_status`, `mobile_observe`, `mobile_click`,
+`mobile_type`, `mobile_swipe`, `mobile_back`, and `mobile_stop` in DSH's existing
+tool runtime. Observation supplies bounded accessibility nodes. Image-capable
+models also receive a real Android screenshot as a DSH image attachment;
+text-only models receive the node tree with an explicit screenshot omission.
+Android 11 screenshots require at least 1100 ms between captures.
+
+Actions require the current native grant and a recent observation of the same
+window. Observe again after every action or stale-observation error. Text input
+replaces the selected editable field; password text is hidden and password
+input is refused. A successful action reports Android's acceptance, so a new
+observation is needed to confirm its visible result. Pause prevents further
+actions; it cannot undo input or a gesture already dispatched to Android.
+
+The native bridge uses an abstract Unix socket, same-UID peer validation and an
+ephemeral bearer passed only to the launched Node process. It exposes no TCP
+control listener or WebView JavaScript authorization method. APK staging adds
+the plugin to its isolated package copy; Termux retains its existing tool set.
+DSH's existing tool approval policy continues to apply.
+
+The host integration checks use the real DSH tool runtime and an isolated
+socket fixture:
+
+```bash
+node scripts/test-android-mobile-tools.mjs /path/to/dsh-package
+```
+
+The optional `scripts/test-support/nim-test-relay.py` and
+`verify-mobile-nim.py` are bounded test helpers for a separately configured
+provider and conversation. Credentials come from private runtime configuration;
+they are never included in the APK. A fixture test does not establish that a
+real model request or Android accessibility action succeeded.
+
 ## Runtime bundle
 
 The Android runtime packaging step must provide all of these files before an

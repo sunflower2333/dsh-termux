@@ -206,6 +206,11 @@ class MainActivity : Activity() {
                         ByteArrayInputStream(ByteArray(0)))
                 }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (request.isForMainFrame && WebNavigation.isMobileControlRequest(
+                            request.url.toString(), view.url, lastReadyLaunchUrl)) {
+                        startActivity(Intent(this@MainActivity, MobileControlActivity::class.java))
+                        return true
+                    }
                     if (request.isForMainFrame && WebNavigation.isConfigurationRequest(
                             request.url.toString(), view.url, lastReadyLaunchUrl)) {
                         openConfigurationDocument()

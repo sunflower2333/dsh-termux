@@ -18,12 +18,21 @@ internal enum class WebNavigationDecision {
 /** URL classification kept free of Android framework types so it can be unit tested. */
 internal object WebNavigation {
     const val CONFIGURATION_PATH = "/__dsh_android__/open-configuration"
+    const val MOBILE_CONTROL_PATH = "/__dsh_android__/mobile-control"
 
     /** One native action, accepted only from the current authenticated DSH page. */
     fun isConfigurationRequest(url: String, pageUrl: String?, readyUrl: String?): Boolean {
+        return isNativeRequest(url, pageUrl, readyUrl, CONFIGURATION_PATH)
+    }
+
+    fun isMobileControlRequest(url: String, pageUrl: String?, readyUrl: String?): Boolean {
+        return isNativeRequest(url, pageUrl, readyUrl, MOBILE_CONTROL_PATH)
+    }
+
+    private fun isNativeRequest(url: String, pageUrl: String?, readyUrl: String?, path: String): Boolean {
         if (!isCurrentOrigin(url, readyUrl) || !isCurrentOrigin(pageUrl, readyUrl)) return false
         val uri = runCatching { URI(url) }.getOrNull() ?: return false
-        return uri.rawPath == CONFIGURATION_PATH && uri.rawQuery == null && uri.rawFragment == null
+        return uri.rawPath == path && uri.rawQuery == null && uri.rawFragment == null
     }
 
     /** Loopback cookies do not isolate ports; keep this WebView on its DSH host. */
