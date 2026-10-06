@@ -128,6 +128,47 @@
     min-height: 44px !important;
     box-sizing: border-box !important;
   }
+  /* Record details use the available phone viewport. Remove the desktop
+     ledger's stacking/container boundary so the fixed panel can cover the
+     composer, and let its summary scroll as a whole below 44px controls. */
+  .qBU-ya_ledger { isolation: auto !important; z-index: auto !important; }
+  .Y0dWHa_split { container-type: normal !important; }
+  .Y0dWHa_details {
+    position: fixed !important;
+    top: 56px !important;
+    right: 8px !important;
+    bottom: 8px !important;
+    left: 8px !important;
+    width: auto !important;
+    max-width: none !important;
+    z-index: 40 !important;
+  }
+  .Y0dWHa_detailsHeader, .Y0dWHa_detailTabs { height: 48px !important; }
+  .Y0dWHa_detailsResizeHandle { display: none !important; }
+  .Y0dWHa_detailBody { padding-bottom: 0 !important; }
+  .Y0dWHa_detailBodySummary {
+    display: block !important;
+    overflow-y: auto !important;
+    padding-bottom: 12px !important;
+  }
+  .Y0dWHa_overviewSections { display: block !important; }
+  .Y0dWHa_overviewSection { display: block !important; max-height: none !important; }
+  .Y0dWHa_overviewHeading {
+    height: auto !important;
+    min-height: 44px !important;
+    align-items: center !important;
+    padding-bottom: 0 !important;
+  }
+  /* Keep preset names, identifiers and status badges readable on narrow
+     screens, including WebViews without flex gap support. */
+  .rtSEdW_cardHead { flex-wrap: wrap !important; }
+  .rtSEdW_cardIdentity {
+    flex: 1 1 100% !important;
+    flex-wrap: wrap !important;
+    margin-bottom: 4px !important;
+  }
+  .rtSEdW_cardIdentity > * + * { margin-left: 6px !important; }
+  .rtSEdW_cardId { max-width: 100% !important; }
   /* Keep the spreadsheet footer around its enlarged mobile touch controls. */
   .fortune-container .luckysheet-sheet-area {
     height: 44px !important;
@@ -514,6 +555,7 @@
   .qBU-ya_root:focus-within .qBU-ya_ledger {
     --dsh-trajectory-bottom-clearance: 16px !important;
   }
+  .Y0dWHa_details { top: 44px !important; }
   [data-composer-seat] { --dsh-composer-text-max-height: 56px !important; }
   [data-composer-input] { min-height: 36px !important; }
   .uV2eYG_card { gap: 4px !important; padding-top: 4px !important; }

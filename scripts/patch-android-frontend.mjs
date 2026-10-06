@@ -77,6 +77,8 @@ export async function patchAndroidFrontend(root) {
     ["wSkVaW", "conversation", "scrollBody"],
     ["qBU-ya", "trajectory", "ledger"],
     ["fV0t5q", "trajectory", "inner"],
+    ["Y0dWHa", "trajectory", "detailsResizeHandle"],
+    ["rtSEdW", "agent-preset", "cardHead"],
     ["pXSMma", "conversation", "fishHitbox"],
     ["uV2eYG", "conversation", "cardWorkspaceTrigger"],
     ["gSkjMW", "attachment", "body"],
