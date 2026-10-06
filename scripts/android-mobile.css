@@ -106,6 +106,28 @@
   }
   .wSkVaW_header { padding-left: 12px !important; padding-right: 12px !important; }
   .wSkVaW_headerCorner { margin-right: 0 !important; }
+  /* The desktop trajectory toolbar is 32px tall. Mobile controls need 44px
+     targets; contain them inside the sticky toolbar instead of letting their
+     top edge protrude behind the conversation tabs. Include its border. */
+  .qBU-ya_root {
+    --dsh-trajectory-toolbar-height: 48px !important;
+    /* Android 11's WebView cannot apply the upstream :has() composer overlay.
+       Bound trajectory to the positioned conversation body so its ledger
+       reserves composer space once, without a second outer scroll surface. */
+    position: absolute !important;
+    top: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    height: auto !important;
+    overflow: hidden !important;
+  }
+  .fV0t5q_root { min-height: 48px !important; flex: none !important; }
+  .fV0t5q_search {
+    height: auto !important;
+    min-height: 44px !important;
+    box-sizing: border-box !important;
+  }
   /* Keep the spreadsheet footer around its enlarged mobile touch controls. */
   .fortune-container .luckysheet-sheet-area {
     height: 44px !important;
@@ -483,6 +505,15 @@
     align-items: center !important;
   }
   [data-conversation-tabs] [role="tab"] { padding-top: 0 !important; padding-bottom: 0 !important; }
+  /* A focused content input (such as Trajectory Search) needs the remaining
+     keyboard viewport for its results. The message editor is a sibling of
+     the session slot, so focusing the editor itself keeps normal Chat input. */
+  .wSkVaW_scrollBody > [data-slot="conversation.session"]:focus-within ~ [data-composer-seat] {
+    display: none !important;
+  }
+  .qBU-ya_root:focus-within .qBU-ya_ledger {
+    --dsh-trajectory-bottom-clearance: 16px !important;
+  }
   [data-composer-seat] { --dsh-composer-text-max-height: 56px !important; }
   [data-composer-input] { min-height: 36px !important; }
   .uV2eYG_card { gap: 4px !important; padding-top: 4px !important; }

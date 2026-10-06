@@ -75,6 +75,8 @@ export async function patchAndroidFrontend(root) {
     ["bhn1Oq", "workspace", "searchButton"],
     ["VOzbGW", "settings-general", "navList"],
     ["wSkVaW", "conversation", "scrollBody"],
+    ["qBU-ya", "trajectory", "ledger"],
+    ["fV0t5q", "trajectory", "inner"],
     ["pXSMma", "conversation", "fishHitbox"],
     ["uV2eYG", "conversation", "cardWorkspaceTrigger"],
     ["gSkjMW", "attachment", "body"],
