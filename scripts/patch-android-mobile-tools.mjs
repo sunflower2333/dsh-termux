@@ -11,9 +11,13 @@ export async function patchAndroidMobileTools(root) {
   const importLine = 'import * as AndroidMobileTools from "./android-mobile-tools.js";';
   const original = "function apply(ctx, config) {\n";
   const replacement = original + '  if (process.env.DSH_ANDROID === "1") ctx.plugin(AndroidMobileTools);\n';
+  const pluginLine = replacement.slice(original.length);
+  const hostFirst = original + '  if (process.env.DSH_ANDROID === "1") ctx.plugin(AndroidHostEvents);\n' + pluginLine;
   let after;
   if (before.includes(importLine)) {
-    if (before.split(importLine).length !== 2 || before.split(replacement).length !== 2) throw new Error("Unsupported existing Android mobile tools patch");
+    if (before.split(importLine).length !== 2 || before.split(original).length !== 2 ||
+        before.split(pluginLine).length !== 2 || (!before.includes(replacement) && !before.includes(hostFirst)))
+      throw new Error("Unsupported existing Android mobile tools patch");
     after = before;
   } else {
     if (before.split(original).length !== 2 || before.includes("AndroidMobileTools")) throw new Error("Unsupported DSH web-app plugin entry");

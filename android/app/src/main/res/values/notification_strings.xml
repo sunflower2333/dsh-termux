@@ -1,0 +1,9 @@
+<resources>
+    <string name="notification_reply_label">Your answer</string>
+    <string name="notification_reply_action">Reply</string>
+    <string name="running_session_channel">Active conversations</string>
+    <string name="running_session_title">Conversation %1$s</string>
+    <string name="running_session_running">Running</string>
+    <string name="running_session_waiting">Waiting for your reply or approval</string>
+    <string name="running_session_metrics">Turns %1$s · Steps %2$s\nSession tokens %3$s\nLatest settled call: uncached input %4$s · output %5$s · total %6$s\nCache read %7$s · write %8$s · hit %12$s\nAverage call speed %9$s tok/s\nContext %10$s / %11$s</string>
+</resources>

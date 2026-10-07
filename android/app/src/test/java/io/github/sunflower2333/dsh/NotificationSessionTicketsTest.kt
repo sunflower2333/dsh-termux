@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NotificationSessionTicketsTest {
+    @Test fun ongoingNotificationCanRenewAnAlreadyConsumedNavigationTicket() {
+        var count = 0
+        val tickets = NotificationSessionTickets({ 100L }, { "ticket-${++count}" })
+        val first = tickets.issue("same-session")
+        assertTrue(tickets.contains(first))
+        assertEquals("same-session", tickets.take(first))
+        assertFalse(tickets.contains(first))
+        val renewed = tickets.issue("same-session")
+        assertTrue(tickets.contains(renewed))
+        assertEquals("same-session", tickets.take(renewed))
+    }
+
     @Test fun revokedCompletedNoticeTicketsCannotEvictStillVisibleQuestion() {
         var count = 0
         val tickets = NotificationSessionTickets({ 100L }, { "ticket-${++count}" })
@@ -41,8 +53,8 @@ class NotificationSessionTicketsTest {
         var count = 0
         val tickets = NotificationSessionTickets({ 0L }, { "ticket-${++count}" })
         val oldest = tickets.issue("session-old")
-        repeat(256) { tickets.issue("session-$it") }
+        repeat(NotificationSessionTickets.MAX_TARGETS) { tickets.issue("session-$it") }
         assertNull(tickets.take(oldest))
-        assertEquals("session-255", tickets.take("ticket-257"))
+        assertEquals("session-${NotificationSessionTickets.MAX_TARGETS - 1}", tickets.take("ticket-${NotificationSessionTickets.MAX_TARGETS + 1}"))
     }
 }

@@ -17,6 +17,41 @@ async function androidWorkspaceDocuments(configured) {
 }
 `;
 
+const nativeSelectedPathHelper = `
+/* dsh-android-workspace-selected-path-v1 */
+async function androidSelectedWorkspacePath(requested) {
+\tif (typeof requested !== "string" || requested.length < 2 || requested.length > 4096 || !posix.isAbsolute(requested) || /[\\u0000-\\u001f\\u007f]/.test(requested) || requested.split("/").some(part => part === "." || part === "..")) throw new Error("Android workspace requires an absolute local directory path");
+\tconst canonical = await androidWorkspaceRealpath(requested);
+\tconst directory = await androidWorkspaceLstat(canonical);
+\tif (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("Android workspace must be a local directory");
+\tawait androidWorkspaceAccess(canonical, androidWorkspaceFsConstants.R_OK | androidWorkspaceFsConstants.W_OK | androidWorkspaceFsConstants.X_OK);
+\tconst listing = await androidWorkspaceOpendir(canonical);
+\tawait listing.close();
+\treturn canonical;
+}
+`;
+
+export async function patchAndroidWorkspaceSelectedPath(root) {
+  const filename = join(root, "node_modules/@deepseek-ai/dsh-api-workspace-controller/lib/index.js");
+  let source = await readFile(filename, "utf8");
+  const marker = "/* dsh-android-workspace-selected-validation-v1 */";
+  const updates = [
+    ['import { lstat as androidWorkspaceLstat, realpath as androidWorkspaceRealpath } from "node:fs/promises";', 'import { access as androidWorkspaceAccess, lstat as androidWorkspaceLstat, opendir as androidWorkspaceOpendir, realpath as androidWorkspaceRealpath } from "node:fs/promises";\nimport { constants as androidWorkspaceFsConstants } from "node:fs";'],
+    ['\t\t\ttry {\n\t\t\t\tconst existing = await this.ctx.workspaceRegistry.resolveByPath(request.path);', '\t\t\ttry {\n\t\t\t\tconst path = process.platform === "android" && process.env.DSH_ANDROID === "1" ? await androidSelectedWorkspacePath(request.path) : request.path;\n\t\t\t\tconst existing = await this.ctx.workspaceRegistry.resolveByPath(path);'],
+    ['workspace: workspaceView(await this.ctx.workspaceRegistry.create(request.path)),', 'workspace: workspaceView(await this.ctx.workspaceRegistry.create(path)),'],
+  ];
+  if (source.includes(marker)) {
+    if (source.split(marker).length !== 2 || source.split(nativeSelectedPathHelper).length !== 2 || updates.some(([, replacement]) => source.split(replacement).length !== 2)) throw new Error("Android workspace: damaged selected-path validation patch");
+    return;
+  }
+  for (const [anchor, replacement] of updates) {
+    if (source.split(anchor).length !== 2) throw new Error(`Android workspace: unsupported selected-path validation anchor (${anchor.slice(0, 80)})`);
+    source = source.replace(anchor, replacement);
+  }
+  await writeFile(filename, `${marker}\n${source}${nativeSelectedPathHelper}`);
+  console.log("patched: Android workspace registration validates readable writable canonical local directories");
+}
+
 export async function patchAndroidWorkspace(root, { nativeShell = false } = {}) {
   const filename = join(root, "node_modules/@deepseek-ai/dsh-api-workspace-controller/lib/index.js");
   const source = await readFile(filename, "utf8");
@@ -63,6 +98,7 @@ export async function patchAndroidWorkspace(root, { nativeShell = false } = {}) 
     await writeFile(browseFilename, addNativeHelper(browse.replace(before, after)));
   }
   console.log("patched: Android workspace browser starts in verified app-owned Documents; invalid defaults never fall back");
+  await patchAndroidWorkspaceSelectedPath(root);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

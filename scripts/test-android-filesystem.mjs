@@ -41,7 +41,7 @@ assert(!original.includes("dsh-android-filesystem-no-replace"), "use an original
 await patchAndroidFileSystem(work);
 const patched = await fsp.readFile(filename, "utf8");
 const originalEnv = { DSH_ANDROID: process.env.DSH_ANDROID };
-let nativeFault, bindingFault, bindingHook;
+let nativeFault, bindingFault, bindingHook, nativeHook, targetHook;
 const nativeCalls = [];
 const syncedSources = new Set();
 const realOpen = fsp.open;
@@ -51,6 +51,7 @@ fsp.open = async function(path, ...args) {
     const actualSync = handle.sync.bind(handle);
     handle.sync = async () => { await actualSync(); syncedSources.add(String(path)); };
   }
+  if (typeof args[0] === "number" && (args[0] & fs.constants.O_CREAT)) await targetHook?.(String(path), handle);
   return handle;
 };
 syncBuiltinESMExports();
@@ -73,6 +74,7 @@ koffi.load = library => {
     return (...args) => {
       nativeCalls.push({ args, synced: syncedSources.has(args[1]), sourceBytes: fs.readFileSync(args[1]),
         sourceMode: fs.statSync(args[1]).mode & 0o777, targetExisted: fs.existsSync(args[3]) });
+      nativeHook?.(args);
       if (nativeFault) return nativeFault.result;
       return native(...args);
     };
@@ -111,9 +113,9 @@ test("patch is idempotent and changes only the publication dispatch plus its hel
   const after = await fsp.stat(filename);
   assert.equal(before.mtimeMs, after.mtimeMs);
   assert.equal(before.ino, after.ino);
-  const stripped = patched.replace(/\/\* dsh-android-filesystem-no-replace-v1 \*\/[^]*?(?=\/\*\*\n\* Atomically replace)/, "")
-    .replace("\t\t\tif (usesAndroidFilePublication()) await renameAndroidFileNoReplace(tempPath, absolutePath, signal);\n\t\t\telse await linkFile(tempPath, absolutePath);", "\t\t\tawait linkFile(tempPath, absolutePath);")
-    .replace('\t\t\tif (error instanceof FsError && error.code === "FS_ABORTED") throw error;\n', "");
+  const stripped = patched.replace(/\/\* dsh-android-filesystem-no-replace-v2 \*\/[^]*?(?=\/\*\*\n\* Atomically replace)/, "")
+    .replace("\t\t\tif (usesAndroidFilePublication()) await renameAndroidFileNoReplace(tempPath, absolutePath, signal, content);\n\t\t\telse await linkFile(tempPath, absolutePath);", "\t\t\tawait linkFile(tempPath, absolutePath);")
+    .replace('\t\t\tif ((error instanceof FsError && error.code === "FS_ABORTED") || error instanceof AndroidExclusiveCreateFailure) throw error;\n', "");
   assert.equal(stripped, original, "staging, fsync, permissions, abort, observed replacements, error mapping and cleanup are byte-identical");
 });
 for (const [name, source] of [
@@ -121,8 +123,8 @@ for (const [name, source] of [
   ["changed cancellation", original.replace('throwIfAborted(signal, "write");', 'throwIfAborted(signal, "edit");')],
   ["changed publication", original.replace("await linkFile(tempPath, absolutePath);", "await rename(tempPath, absolutePath);")],
   ["changed patched errno", patched.replace('errno === 17 ? "EEXIST"', 'errno === 18 ? "EEXIST"')],
-  ["missing patched dispatch", patched.replace("if (usesAndroidFilePublication()) await renameAndroidFileNoReplace(tempPath, absolutePath, signal);", "if (false) await renameAndroidFileNoReplace(tempPath, absolutePath, signal);")],
-  ["duplicate marker", patched + "\n/* dsh-android-filesystem-no-replace-v1 */\n"],
+  ["missing patched dispatch", patched.replace("if (usesAndroidFilePublication()) await renameAndroidFileNoReplace(tempPath, absolutePath, signal, content);", "if (false) await renameAndroidFileNoReplace(tempPath, absolutePath, signal, content);")],
+  ["duplicate marker", patched + "\n/* dsh-android-filesystem-no-replace-v2 */\n"],
 ]) {
   test(`patch rejects ${name} without modifying its input`, async () => {
     const root = join(work, "guards", name.replaceAll(" ", "-"));
@@ -235,7 +237,7 @@ test("observed replacement, literal edit, mode preservation and stale-version ch
 for (const [name, result, errno] of [
   ["unexpected success value", 1, 0], ["zero errno", -1, 0], ["fractional errno", -1, 1.5],
   ["negative errno", -1, -13], ["overflow errno", -1, 4096], ["permission denial", -1, 13],
-  ["unsupported syscall", -1, 38],
+  ["unsupported syscall", -1, 38], ["operation permission denial", -1, 1],
 ]) {
   test(`injected native ${name} fails closed, cleans staging and never creates a partial target`, async () => {
     const f = await fixture("fault-" + name.replaceAll(" ", "-"));
@@ -266,4 +268,173 @@ test("the real patched sandbox provider permits guarded workspace creation and r
   await noFile(outside.targetKey); assert.equal(nativeCalls.length, before);
   await assert.rejects(f.provider.writeText(f.target, "readonly", guarded, undefined, { mode: "read-only", workspaceRoot: f.directory }), { code: "FS_SANDBOX_DENIED" });
   assert.equal(await f.provider.readText(f.target), "inside\n"); await clean(f.directory, ["target.txt"]);
+});
+
+for (const errno of [22, 95]) {
+  for (const content of ["", "shared 中文 🌻\n".repeat(4096)]) {
+    test(`unsupported rename flags ${errno} create and verify real SDK bytes (${content.length} characters)`, async () => {
+      const f = await fixture(`fuse-${errno}-${content.length}`);
+      nativeFault = { result: -1, errno };
+      try { await f.provider.writeText(f.target, content, guarded); }
+      finally { nativeFault = undefined; }
+      assert.equal(await f.provider.readText(f.target), content);
+      await clean(f.directory, ["target.txt"]);
+    });
+  }
+}
+
+test("a concurrent creator between unsupported rename and exclusive open is never overwritten", async () => {
+  const f = await fixture("fuse-race");
+  nativeFault = { result: -1, errno: 22 };
+  nativeHook = args => fs.writeFileSync(args[3], "concurrent file\n", { flag: "wx" });
+  try { await assert.rejects(f.provider.writeText(f.target, "ours\n", guarded), { code: "FS_NOT_OBSERVED" }); }
+  finally { nativeFault = nativeHook = undefined; }
+  assert.equal(await f.provider.readText(f.target), "concurrent file\n");
+  await clean(f.directory, ["target.txt"]);
+});
+
+test("changed synced staging bytes are rejected before any exclusive destination claim", async () => {
+  const f = await fixture("fuse-stage-tamper");
+  nativeFault = { result: -1, errno: 22 };
+  nativeHook = args => fs.writeFileSync(args[1], "wrong\n");
+  try { await assert.rejects(f.provider.writeText(f.target, "right\n", guarded), { code: "FS_IO_ERROR" }); }
+  finally { nativeFault = nativeHook = undefined; }
+  await clean(f.directory);
+});
+
+test("a symlink replacement of the staging file is never followed", async () => {
+  const f = await fixture("fuse-stage-symlink");
+  const other = join(f.directory, "other.txt"); await fsp.writeFile(other, "right\n");
+  nativeFault = { result: -1, errno: 22 };
+  nativeHook = args => { fs.renameSync(args[1], args[1] + ".old"); fs.symlinkSync(other, args[1]); };
+  try { await assert.rejects(f.provider.writeText(f.target, "right\n", guarded), { code: "FS_IO_ERROR" }); }
+  finally { nativeFault = nativeHook = undefined; }
+  assert.equal(await fsp.readFile(other, "utf8"), "right\n"); await clean(f.directory, ["other.txt"]);
+});
+
+test("abort after unsupported rename but before exclusive claim creates no destination", async () => {
+  const f = await fixture("fuse-preclaim-abort"), controller = new AbortController();
+  nativeFault = { result: -1, errno: 22 }; nativeHook = () => controller.abort();
+  try { await assert.rejects(f.provider.writeText(f.target, "ours\n", guarded, controller.signal), { code: "FS_ABORTED" }); }
+  finally { nativeFault = nativeHook = undefined; }
+  await clean(f.directory);
+});
+
+for (const aborted of [false, true]) {
+  test(`post-claim ${aborted ? "abort" : "IO fault"} retains partial bytes and the correct SDK error`, async () => {
+    const f = await fixture(`fuse-partial-${aborted}`);
+    nativeFault = { result: -1, errno: 22 };
+    targetHook = async (_path, handle) => {
+      const write = handle.writeFile.bind(handle);
+      handle.writeFile = async () => {
+        await write(Buffer.from("part"));
+        const error = new Error("injected post-claim failure");
+        if (aborted) { error.name = "AbortError"; error.code = "ABORT_ERR"; }
+        throw error;
+      };
+    };
+    try {
+      await assert.rejects(f.provider.writeText(f.target, "complete bytes\n", guarded), error => {
+        assert.equal(error.code, aborted ? "FS_ABORTED" : "FS_IO_ERROR");
+        assert.match(error.message, /may be partial.*Read it before retrying/);
+        return true;
+      });
+    } finally { nativeFault = targetHook = undefined; }
+    assert.equal(await f.provider.readText(f.target), "part");
+    const version = (await f.provider.stat(f.target)).version;
+    await f.provider.writeText(f.target, "repaired\n", { kind: "replaceIfVersion", version });
+    assert.equal(await f.provider.readText(f.target), "repaired\n");
+    await clean(f.directory, ["target.txt"]);
+  });
+}
+
+for (const phase of ["sync", "read", "stat", "close"]) {
+  test(`abort during post-claim ${phase} returns FS_ABORTED and preserves the exclusively created file`, async () => {
+    const f = await fixture(`fuse-abort-${phase}`), controller = new AbortController();
+    nativeFault = { result: -1, errno: 22 };
+    targetHook = async (_path, handle) => {
+      const method = handle[phase].bind(handle); let calls = 0;
+      handle[phase] = async (...args) => {
+        const value = await method(...args); calls++;
+        if (phase !== "stat" || calls === 2) controller.abort();
+        return value;
+      };
+    };
+    try { await assert.rejects(f.provider.writeText(f.target, "complete bytes\n", guarded, controller.signal), { code: "FS_ABORTED" }); }
+    finally { nativeFault = targetHook = undefined; }
+    assert.equal(await f.provider.readText(f.target), "complete bytes\n");
+    await clean(f.directory, ["target.txt"]);
+  });
+}
+
+test("post-claim path replacement is detected and the other process's file is preserved", async () => {
+  const f = await fixture("fuse-postclaim-replacement");
+  nativeFault = { result: -1, errno: 22 };
+  targetHook = async (path, handle) => {
+    const sync = handle.sync.bind(handle);
+    handle.sync = async () => {
+      await sync(); await fsp.rename(path, path + ".owned");
+      await fsp.writeFile(path, "replacement survives\n", { flag: "wx" });
+    };
+  };
+  try { await assert.rejects(f.provider.writeText(f.target, "our completed bytes\n", guarded), { code: "FS_IO_ERROR" }); }
+  finally { nativeFault = targetHook = undefined; }
+  assert.equal(await f.provider.readText(f.target), "replacement survives\n");
+  assert.equal(await fsp.readFile(f.target.targetKey + ".owned", "utf8"), "our completed bytes\n");
+  await clean(f.directory, ["target.txt", "target.txt.owned"]);
+});
+
+test("readback mismatch is reported without deleting the created file", async () => {
+  const f = await fixture("fuse-readback-mismatch");
+  nativeFault = { result: -1, errno: 22 };
+  targetHook = async (_path, handle) => {
+    const write = handle.writeFile.bind(handle);
+    handle.writeFile = () => write(Buffer.from("wrong\n"));
+  };
+  try { await assert.rejects(f.provider.writeText(f.target, "right\n", guarded), { code: "FS_IO_ERROR" }); }
+  finally { nativeFault = targetHook = undefined; }
+  assert.equal(await f.provider.readText(f.target), "wrong\n");
+  await clean(f.directory, ["target.txt"]);
+});
+
+test("unsupported flags do not bypass the sandbox fence or read-only policy", async () => {
+  const f = await fixture("fuse-sandbox", { Provider: SandboxedFileSystem });
+  nativeFault = { result: -1, errno: 22 };
+  try {
+    await f.provider.writeText(f.target, "inside\n", guarded);
+    const before = nativeCalls.length;
+    const outside = await f.provider.resolve(join("/proc", basename(work) + "-fuse-outside.txt"));
+    await assert.rejects(f.provider.writeText(outside, "outside", guarded), { code: "FS_SANDBOX_DENIED" });
+    await assert.rejects(f.provider.writeText(f.target, "readonly", guarded, undefined,
+      { mode: "read-only", workspaceRoot: f.directory }), { code: "FS_SANDBOX_DENIED" });
+    assert.equal(nativeCalls.length, before); await noFile(outside.targetKey);
+  } finally { nativeFault = undefined; }
+  assert.equal(await f.provider.readText(f.target), "inside\n"); await clean(f.directory, ["target.txt"]);
+});
+
+test("a shared-filesystem failure never disables atomic rename for a subsequent supported filesystem", async () => {
+  const f = await fixture("fuse-no-global-fallback");
+  const before = nativeCalls.length;
+  await f.provider.writeText(f.target, "normal atomic creation\n", guarded);
+  assert.equal(nativeCalls.length, before + 1);
+  assert.equal(await f.provider.readText(f.target), "normal atomic creation\n");
+  await clean(f.directory, ["target.txt"]);
+});
+
+test("the exact known legacy patch migrates once; damaged legacy input fails closed", async () => {
+  const legacyHelper = "/* dsh-android-filesystem-no-replace-v1 */\n// Android untrusted_app cannot hard-link app data. Publish the complete,\n// synced sibling with the kernel's atomic no-replace rename instead. This\n// changes only guarded creation; observed replacements keep their old path.\nlet androidFilePublication;\nfunction usesAndroidFilePublication() {\n\treturn process.platform === \"android\" || process.env.DSH_ANDROID === \"1\";\n}\nasync function renameAndroidFileNoReplace(source, target, signal) {\n\tif (androidFilePublication === undefined) {\n\t\tconst koffi = (await import(\"koffi\")).default;\n\t\tconst libc = koffi.load(process.platform === \"android\" ? \"libc.so\" : \"libc.so.6\");\n\t\tandroidFilePublication = {\n\t\t\tkoffi,\n\t\t\tlibc,\n\t\t\trename: libc.func(\"int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned int flags)\")\n\t\t};\n\t}\n\t// Initial lazy loading can yield. Recheck cancellation at the actual commit.\n\tthrowIfAborted(signal, \"write\");\n\tconst { koffi, rename } = androidFilePublication;\n\tconst result = rename(-100, source, -100, target, 1);\n\t// errno belongs to this synchronous native thread; never await before reading it.\n\tconst errno = result === -1 ? koffi.errno() : 0;\n\tif (result === 0) return;\n\tif (result !== -1 || !Number.isInteger(errno) || errno <= 0 || errno > 4095) {\n\t\tthrow new FsError(\"Android file atomic publication returned an invalid native result.\", \"FS_IO_ERROR\");\n\t}\n\tconst error = new Error(\"Android file atomic publication failed with errno \" + errno + \".\");\n\terror.code = errno === 17 ? \"EEXIST\" : errno === 13 ? \"EACCES\" : errno === 1 ? \"EPERM\" : \"EANDROID_RENAME\";\n\terror.errno = errno;\n\terror.syscall = \"renameat2\";\n\tthrow error;\n}\n";
+  const root = join(work, "legacy-migration"), file = join(root, "node_modules/@deepseek-ai/dsh-fs-local/lib/index.js");
+  await fsp.mkdir(dirname(file), { recursive: true }); await fsp.writeFile(file, original);
+  const legacy = original.replace("/**\n* Atomically replace", legacyHelper + "/**\n* Atomically replace")
+    .replace("\t\t\tawait linkFile(tempPath, absolutePath);", "\t\t\tif (usesAndroidFilePublication()) await renameAndroidFileNoReplace(tempPath, absolutePath, signal);\n\t\t\telse await linkFile(tempPath, absolutePath);")
+    .replace("\t\t\tawait throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);", "\t\t\tif (error instanceof FsError && error.code === \"FS_ABORTED\") throw error;\n\t\t\tawait throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);");
+  await fsp.writeFile(file, legacy);
+  assert.ok(legacy.includes("dsh-android-filesystem-no-replace-v1"));
+  await patchAndroidFileSystem(root);
+  assert.equal(await fsp.readFile(file, "utf8"), patched);
+  assert.deepEqual(await patchAndroidFileSystem(root), { changed: false });
+  const damaged = legacy.replace('errno === 17 ? "EEXIST"', 'errno === 18 ? "EEXIST"');
+  await fsp.writeFile(file, damaged);
+  await assert.rejects(patchAndroidFileSystem(root), /damaged legacy/);
+  assert.equal(await fsp.readFile(file, "utf8"), damaged);
 });

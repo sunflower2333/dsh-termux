@@ -37,15 +37,17 @@ class MobileProtocolTest {
         }
     }
 
-    @Test fun observeDefaultsScreenshotToTrueWithoutCoercingAnExplicitValue() {
+    @Test fun observeDefaultsToAccessibilityTextWithoutCoercingScreenshotConsent() {
         assertEquals(
-            MobileCommand.Observe(session, true),
+            MobileCommand.Observe(session, false),
             MobileProtocol.parse(MobileOperation.OBSERVE, mapOf("sessionId" to session))
         )
         assertEquals(
             MobileCommand.Observe(session, false),
             MobileProtocol.parse(MobileOperation.OBSERVE, mapOf("sessionId" to session, "screenshot" to false))
         )
+        assertEquals(MobileCommand.Observe(session, true),
+            MobileProtocol.parse(MobileOperation.OBSERVE, mapOf("sessionId" to session, "screenshot" to true)))
         listOf(null, "true", 1, emptyList<Any>()).forEach { value ->
             expectFailure {
                 MobileProtocol.parse(MobileOperation.OBSERVE, mapOf("sessionId" to session, "screenshot" to value))
@@ -215,12 +217,28 @@ class MobileProtocolTest {
         errors.forEach { assertFalse(it.message.orEmpty().contains(secret)) }
     }
 
+    @Test fun nodeScrollCannotSmuggleCoordinatesOrOperateWithoutAnObservedTarget() {
+        for (direction in listOf("forward", "backward")) {
+            assertEquals(MobileCommand.Scroll(session, observation, "node:2", direction),
+                MobileProtocol.parse(MobileOperation.SCROLL, base + mapOf("nodeId" to "node:2", "direction" to direction)))
+        }
+        val valid = validFields(MobileOperation.SCROLL)
+        for (key in listOf("sessionId", "observationId", "nodeId", "direction")) {
+            expectFailure { MobileProtocol.parse(MobileOperation.SCROLL, valid - key) }
+        }
+        for (direction in listOf(null, true, 1, "up", "FORWARD", "forward\n")) {
+            expectFailure { MobileProtocol.parse(MobileOperation.SCROLL, valid + ("direction" to direction)) }
+        }
+        expectFailure { MobileProtocol.parse(MobileOperation.SCROLL, valid + ("x" to 10)) }
+    }
+
     private fun validFields(operation: MobileOperation): Map<String, Any?> = when (operation) {
         MobileOperation.STATUS, MobileOperation.STOP -> emptyMap()
         MobileOperation.OBSERVE -> mapOf("sessionId" to session)
         MobileOperation.CLICK -> base + ("nodeId" to "node:2")
         MobileOperation.TYPE -> base + mapOf("nodeId" to "node:3", "text" to "fixture")
         MobileOperation.SWIPE -> base + mapOf("fromX" to 0, "fromY" to 10, "toX" to 20, "toY" to 30)
+        MobileOperation.SCROLL -> base + mapOf("nodeId" to "node:2", "direction" to "forward")
         MobileOperation.BACK -> base
         MobileOperation.LIST_APPS -> mapOf("sessionId" to session)
         MobileOperation.OPEN_APP -> base + ("packageName" to "com.android.settings")

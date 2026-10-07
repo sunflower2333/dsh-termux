@@ -74,8 +74,14 @@ class MobileAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        revision.incrementAndGet()
-        MobileUseController.updatePackage(event.packageName?.toString())
+        val root = rootInActiveWindow
+        val activeWindow = try {
+            MobileUseController.updatePackage(root?.packageName?.toString())
+            root?.windowId
+        } finally { root?.recycle() }
+        if (event.eventType in SCREEN_EVENTS && MobileObservationPolicy.changesActiveScreen(event.windowId,
+                activeWindow, event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+                    event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED)) revision.incrementAndGet()
         if (MobileUseController.isDeviceLocked(this)) MobileUseController.pause("device_locked")
     }
 
@@ -146,20 +152,36 @@ class MobileAccessibilityService : AccessibilityService() {
                         captureAfterFeedback()
                     }
                     is MobileCommand.Click -> {
-                        val snapshot = requireObservation(command.observationId, grant, strictRevision = command.nodeId == null)
-                        val point = if (command.nodeId != null) {
-                            withTarget(snapshot, command.nodeId) { node ->
+                        val snapshot = requireObservation(command.observationId, grant,
+                            strictRevision = command.nodeId == null, nodeTarget = command.nodeId != null)
+                        if (command.nodeId != null) {
+                            var outline: Rect? = null
+                            val accepted = withTarget(snapshot, command.nodeId) { node ->
                                 val rect = Rect().also(node::getBoundsInScreen)
                                 requireVisible(node, rect)
-                                Pair(rect.exactCenterX().toDouble(), rect.exactCenterY().toDouble())
+                                if (node.actionList.none { it.id == AccessibilityNodeInfo.ACTION_CLICK }) {
+                                    throw NativeFailure("not_clickable", "This node has no click action; choose its observed clickable parent")
+                                }
+                                outline = Rect(rect)
+                                requireCurrent()
+                                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                             }
-                        } else Pair(command.x!!, command.y!!)
-                        MobileProtocol.requireCoordinates(point.first, point.second, snapshot.display.width, snapshot.display.height)
-                        requireCurrent()
-                        gesture(point.first, point.second, point.first, point.second, 80, command.observationId, "click", ::finish)
+                            observation = null
+                            if (!accepted) throw NativeFailure("action_failed", "Android rejected the node click")
+                            outline?.let { feedback.gesture(it.exactCenterX().toDouble(), it.exactCenterY().toDouble(),
+                                it.exactCenterX().toDouble(), it.exactCenterY().toDouble(), 80,
+                                snapshot.display.width, snapshot.display.height) }
+                            finish(performed("click", command.observationId))
+                        } else {
+                            val x = requireNotNull(command.x)
+                            val y = requireNotNull(command.y)
+                            MobileProtocol.requireCoordinates(x, y, snapshot.display.width, snapshot.display.height)
+                            requireCurrent()
+                            gesture(x, y, x, y, 80, command.observationId, "click", ::finish)
+                        }
                     }
                     is MobileCommand.Type -> {
-                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false)
+                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false, nodeTarget = true)
                         var outline: Rect? = null
                         val accepted = withTarget(snapshot, command.nodeId) { node ->
                             if (node.isPassword) throw NativeFailure("password_field", "Phone control cannot fill password fields")
@@ -189,6 +211,26 @@ class MobileAccessibilityService : AccessibilityService() {
                         gesture(command.fromX, command.fromY, command.toX, command.toY, command.durationMs,
                             command.observationId, "swipe", ::finish)
                     }
+                    is MobileCommand.Scroll -> {
+                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false, nodeTarget = true)
+                        var outline: Rect? = null
+                        val action = if (command.direction == "forward") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                            else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                        val accepted = withTarget(snapshot, command.nodeId) { node ->
+                            val rect = Rect().also(node::getBoundsInScreen)
+                            requireVisible(node, rect)
+                            if (!node.isScrollable || node.actionList.none { it.id == action }) {
+                                throw NativeFailure("not_scrollable", "This node cannot scroll in the requested direction")
+                            }
+                            outline = Rect(rect)
+                            requireCurrent()
+                            node.performAction(action)
+                        }
+                        observation = null
+                        if (!accepted) throw NativeFailure("action_failed", "Android rejected the node scroll")
+                        outline?.let { feedback.type(it, snapshot.display.width, snapshot.display.height) }
+                        finish(performed("scroll", command.observationId))
+                    }
                     is MobileCommand.Back -> {
                         requireObservation(command.observationId, grant, strictRevision = false)
                         observation = null
@@ -202,7 +244,8 @@ class MobileAccessibilityService : AccessibilityService() {
                         finish(MobileUseController.success(value))
                     }
                     is MobileCommand.OpenApp -> {
-                        requireObservation(command.observationId, grant)
+                        // Launching a validated app has no screen-coordinate or node dependency.
+                        // Streaming chat events or a slow model must not block it with a stale frame.
                         val intent = MobileLauncherApps(this).intent(command.packageName)
                             ?: throw NativeFailure("app_not_available", "This package has no available launcher activity")
                         requireCurrent()
@@ -212,7 +255,8 @@ class MobileAccessibilityService : AccessibilityService() {
                         catch (_: ActivityNotFoundException) { throw NativeFailure("app_not_available", "The launcher activity is unavailable") }
                         catch (_: SecurityException) { throw NativeFailure("app_not_available", "Android does not allow this launcher activity") }
                         finish(MobileUseController.success(JSONObject().put("performed", true).put("action", "open_app")
-                            .put("observationId", command.observationId).put("packageName", command.packageName).put("foregroundOnly", true)))
+                            .put("sessionId", grant.sessionId).put("observationId", command.observationId)
+                            .put("packageName", command.packageName).put("foregroundOnly", true)))
                     }
                     else -> throw NativeFailure("invalid_request", "Unsupported native phone action")
                 }
@@ -240,6 +284,7 @@ class MobileAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: throw NativeFailure("no_window", "Android has no accessible active window")
         val nodes = JSONArray()
         val targets = LinkedHashMap<String, Target>()
+        val retainedPaths = HashMap<List<Int>, String>()
         val sampled = SystemClock.uptimeMillis()
         val capturedRevision = revision.get()
         val windowId = root.windowId
@@ -250,17 +295,34 @@ class MobileAccessibilityService : AccessibilityService() {
             // real geometry: omit that target, but still inspect its children.
             if (!MobileObservationTree.acceptsBounds(rect.left, rect.top, rect.right, rect.bottom)) return false
             val id = "n${targets.size}"
+            var parentId: String? = null
+            var parentPath = path
+            while (parentPath.isNotEmpty() && parentId == null) {
+                parentPath = parentPath.dropLast(1)
+                parentId = retainedPaths[parentPath]
+            }
             val target = Target(path, node.className?.toString(), node.viewIdResourceName,
                 node.packageName?.toString(), Rect(rect), if (node.isPassword) null else node.text?.toString()?.take(MAX_TEXT),
                 if (node.isPassword) null else node.contentDescription?.toString()?.take(MAX_TEXT),
-                node.isPassword, node.isEnabled, node.isClickable, node.isEditable)
+                node.isPassword, node.isEnabled, node.isClickable, node.isEditable, node.isScrollable)
             targets[id] = target
+            retainedPaths[path] = id
+            val actions = node.actionList.mapNotNull { action -> when (action.id) {
+                AccessibilityNodeInfo.ACTION_CLICK -> "click"
+                AccessibilityNodeInfo.ACTION_SET_TEXT -> if (node.isPassword) null else "set_text"
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> "scroll_forward"
+                AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> "scroll_backward"
+                AccessibilityNodeInfo.ACTION_FOCUS -> "focus"
+                else -> null
+            } }.distinct()
             val row = JSONObject().put("id", id)
                 .put("className", target.className?.take(256).orEmpty())
                 .put("viewId", target.viewId?.take(256).orEmpty())
                 .put("packageName", target.packageName?.take(256).orEmpty())
                 .put("bounds", bounds(rect)).put("clickable", node.isClickable)
                 .put("editable", node.isEditable).put("password", node.isPassword)
+                .put("scrollable", node.isScrollable).put("parentId", parentId ?: JSONObject.NULL)
+                .put("actions", JSONArray(actions))
                 .put("enabled", node.isEnabled)
                 .put("visible", node.isVisibleToUser)
             if (!node.isPassword) {
@@ -352,11 +414,12 @@ class MobileAccessibilityService : AccessibilityService() {
         })
     }
 
-    private fun requireObservation(id: String, grant: MobileUseController.Grant, strictRevision: Boolean = true): Observation {
+    private fun requireObservation(id: String, grant: MobileUseController.Grant, strictRevision: Boolean = true,
+        nodeTarget: Boolean = false): Observation {
         requireGrant(grant)
         val snapshot = observation
         if (snapshot == null || snapshot.id != id || snapshot.session != grant.sessionId ||
-            SystemClock.uptimeMillis() - snapshot.issuedAt > OBSERVATION_TTL_MS ||
+            !MobileObservationPolicy.fresh(snapshot.issuedAt, SystemClock.uptimeMillis(), nodeTarget) ||
             (strictRevision && snapshot.revision != revision.get()) || !sameWindow(snapshot)) {
             throw NativeFailure("stale_observation", "Observe the current screen before acting")
         }
@@ -385,6 +448,7 @@ class MobileAccessibilityService : AccessibilityService() {
                 current.viewIdResourceName != expected.viewId || current.packageName?.toString() != expected.packageName ||
                 bounds != expected.bounds || current.isPassword != expected.password ||
                 current.isEnabled != expected.enabled || current.isClickable != expected.clickable || current.isEditable != expected.editable ||
+                current.isScrollable != expected.scrollable ||
                 (!current.isPassword && (current.text?.toString()?.take(MAX_TEXT) != expected.text ||
                     current.contentDescription?.toString()?.take(MAX_TEXT) != expected.description))) {
                 throw NativeFailure("stale_observation", "The observed node changed; observe again")
@@ -439,7 +503,7 @@ class MobileAccessibilityService : AccessibilityService() {
     }
     private data class Target(val path: List<Int>, val className: String?, val viewId: String?, val packageName: String?,
         val bounds: Rect, val text: String?, val description: String?, val password: Boolean,
-        val enabled: Boolean, val clickable: Boolean, val editable: Boolean)
+        val enabled: Boolean, val clickable: Boolean, val editable: Boolean, val scrollable: Boolean)
     private data class Observation(val id: String, val session: String, val issuedAt: Long, val revision: Long,
         val window: Int, val packageName: String, val display: Screen, val targets: Map<String, Target>)
     private class NativeFailure(val code: String, message: String) : Exception(message)
@@ -450,7 +514,11 @@ class MobileAccessibilityService : AccessibilityService() {
         private const val MAX_TEXT = 2048
         private const val MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024
         private const val SCREENSHOT_INTERVAL_MS = 1100L
-        private const val OBSERVATION_TTL_MS = 30_000L
+        private val SCREEN_EVENTS = setOf(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED, AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED, AccessibilityEvent.TYPE_VIEW_SELECTED)
         private fun bounds(rect: Rect) = JSONObject().put("left", rect.left).put("top", rect.top)
             .put("right", rect.right).put("bottom", rect.bottom)
     }

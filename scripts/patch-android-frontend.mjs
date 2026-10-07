@@ -2,6 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { patchAndroidSettingsUi } from "./patch-android-settings-ui.mjs";
 
 const START = "/* dsh-android-mobile */";
 const END = "/* dsh-android-mobile-end */";
@@ -166,6 +167,9 @@ async function patchMobileUseSettings(root) {
   let source = await readFile(filename, "utf8");
   const marker = "/* dsh-android-mobile-use-settings-v1 */";
   const route = "/__dsh_android__/mobile-control";
+  // The newer themed section owns strict validation and intentionally replaces
+  // the old native Activity route. Validate it in patchAndroidSettingsUi below.
+  if (source.includes("/* dsh-android-web-settings-ui-v1 */")) return;
   if (source.includes(marker)) {
     for (const anchor of [marker, 'function AndroidMobileUseSection({ t }) {',
       'id: "android-mobile-use",', `window.location.assign("${route}")`]) {
@@ -354,6 +358,150 @@ async function patchSidebarDestinations(root) {
   console.log("patched: dsh Android UI: sidebar closes after actual destination navigation");
 }
 
+/** Native workspace admission uses the real Workspace and Session controllers. */
+export async function patchAndroidWorkspacePicker(root) {
+  const filename = join(root, "node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js");
+  let source = await readFile(filename, "utf8");
+  const marker = "/* dsh-android-workspace-picker-v1 */";
+  const updates = [
+    ['          const stopAndroidOpener = window.DshAndroidNavigation?.installSessionOpener(sessions, this) ?? (() => {});', `          const stopAndroidOpener = window.DshAndroidNavigation?.installSessionOpener(sessions, this) ?? (() => {});
+          const stopAndroidWorkspaceChooser = window.DshAndroidNavigation?.installWorkspaceChooser(async (path) => {
+            this.lifetime.signal.throwIfAborted();
+            const workspace = await this.workspaces.create({ path });
+            this.lifetime.signal.throwIfAborted();
+            const selected = await this.openWorkspace(workspace.workspaceId);
+            this.lifetime.signal.throwIfAborted();
+            if (!selected || this.selection.getSnapshot().sessionId !== selected) throw new Error("Workspace selection was interrupted. Choose the folder again.");
+          }) ?? (() => {});`],
+    ['        this.replaceMain(sessionId, navigation, "reveal", beforeOpen);\n      }\n      async forkSession(', '        this.replaceMain(sessionId, navigation, "reveal", beforeOpen);\n        return sessionId;\n      }\n      async forkSession('],
+    ['            stopAndroidOpener();', '            stopAndroidWorkspaceChooser();\n            stopAndroidOpener();'],
+    ['      const [flowOpen, setFlowOpen] = (0, react.useState)(false);', `      const [flowOpen, setFlowOpen] = (0, react.useState)(false);
+      const [androidChooserOpen, setAndroidChooserOpen] = (0, react.useState)(false);`],
+    ['      const flowBusy = flowOpen || pickingFolder;', '      const flowBusy = flowOpen || pickingFolder || androidChooserOpen;'],
+    ['      const openDirectoryFlow = (0, react.useCallback)(() => {\n        onClose();\n        setErrorOpen(false);\n        setModalError(null);\n        setFlowOpen(true);\n        window.DshAndroidNavigation?.closeSidebar();\n      }, [onClose]);', `      const openAppDirectoryFlow = () => {
+        onClose();
+        setAndroidChooserOpen(false);
+        setErrorOpen(false);
+        setModalError(null);
+        setFlowOpen(true);
+        window.DshAndroidNavigation?.closeSidebar();
+      };
+      const openDirectoryFlow = (0, react.useCallback)(() => {
+        onClose();
+        setErrorOpen(false);
+        setModalError(null);
+        if (window.DshAndroidNavigation) setAndroidChooserOpen(true);
+        else setFlowOpen(true);
+      }, [onClose]);
+      const closeAndroidChooser = () => {
+        if (pickingFolder) return;
+        setAndroidChooserOpen(false);
+        onClose();
+      };
+      const chooseAndroidFolder = () => {
+        if (pickingFolder) return;
+        setPickingFolder(true);
+        const failed = (code) => {
+          setPickingFolder(false);
+          setAndroidChooserOpen(false);
+          setModalError(t(androidWorkspaceErrorKey(code)));
+          setErrorOpen(true);
+        };
+        const queued = window.DshAndroidNavigation?.chooseWorkspace({
+          onSuccess: () => { setPickingFolder(false); setAndroidChooserOpen(false); onClose(); },
+          onCancel: () => { setPickingFolder(false); setAndroidChooserOpen(true); },
+          onBrowse: () => { setPickingFolder(false); openAppDirectoryFlow(); },
+          onError: failed
+        });
+        if (!queued) failed("request-expired");
+      };`],
+    ['        renderDirectoryFlow(flowOwner),', `        renderDirectoryFlow(flowOwner),
+        (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
+          open: androidChooserOpen,
+          onClose: closeAndroidChooser,
+          closeLabel: t("close"),
+          title: t("androidFolder.title"),
+          footer: (0, react_jsx_runtime.jsxs)("div", {
+            style: { display: "flex", flexDirection: "column", flexWrap: "wrap", justifyContent: "flex-end", minWidth: 0, width: "100%" }, children: [
+            (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+              style: { minHeight: 44, minWidth: 0, width: "100%", whiteSpace: "normal" },
+              variant: "primary", disabled: pickingFolder, onClick: chooseAndroidFolder, children: t("androidFolder.choose")
+            }),
+            (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+              style: { minHeight: 44, minWidth: 0, width: "100%", marginTop: 10, whiteSpace: "normal" },
+              variant: "outline", disabled: pickingFolder, onClick: openAppDirectoryFlow, children: t("androidFolder.appFolder")
+            }),
+            (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Button, {
+              style: { minHeight: 44, minWidth: 0, width: "100%", marginTop: 10, whiteSpace: "normal" },
+              variant: "outline", disabled: pickingFolder, onClick: closeAndroidChooser, children: t("cancel")
+            })
+          ] }),
+          children: (0, react_jsx_runtime.jsxs)("div", {
+            "data-dsh-android-workspace-permission": "",
+            style: { display: "flex", flexDirection: "column", gap: 16, lineHeight: "22px" },
+            children: [
+              (0, react_jsx_runtime.jsx)("p", { style: { margin: 0 }, children: t("androidFolder.description") }),
+              (0, react_jsx_runtime.jsx)("p", { style: { margin: 0 }, children: t("androidFolder.access") }),
+              (0, react_jsx_runtime.jsx)("p", { style: { margin: 0 }, children: t("androidFolder.limits") })
+            ]
+          })
+        }),`],
+    ['    const ADD_WORKSPACE = "::add-workspace";', `    const ADD_WORKSPACE = "::add-workspace";
+    function androidWorkspaceErrorKey(code) {
+      return ({
+        "permission-denied": "androidFolder.permissionDenied",
+        "picker-unavailable": "androidFolder.pickerUnavailable",
+        "settings-unavailable": "androidFolder.settingsUnavailable",
+        "folder-not-writable": "androidFolder.folderUnavailable",
+        "gesture-required": "androidFolder.requestExpired",
+        "unsupported-provider": "androidFolder.unsupportedProvider",
+        "folder-unavailable": "androidFolder.folderUnavailable",
+        "request-expired": "androidFolder.requestExpired"
+      })[code] ?? "androidFolder.selectionFailed";
+    }`],
+    ['    const zh = {', `    const zh = {
+      "androidFolder.title": "工作区文件夹",
+      "androidFolder.description": "DSH 会在此文件夹内运行命令并读写文件。",
+      "androidFolder.access": "选择手机文件夹后，先在系统设置允许访问所有文件，再选择目录。",
+      "androidFolder.limits": "应用内文件夹无需存储权限。暂不支持云盘及 Android/data、Android/obb。",
+      "androidFolder.choose": "选择手机文件夹",
+      "androidFolder.appFolder": "使用应用内文件夹",
+      "androidFolder.permissionDenied": "未允许管理所有文件。请重试并在 Android 设置中开启权限，或选择应用内文件夹。",
+      "androidFolder.pickerUnavailable": "设备上没有可用的系统文件夹选择器。请安装或启用文件管理器，或选择应用内文件夹。",
+      "androidFolder.settingsUnavailable": "无法打开系统存储权限设置。请在 Android 设置中为 DSH 允许管理所有文件，或选择应用内文件夹。",
+      "androidFolder.unsupportedProvider": "所选目录没有可用于命令运行的本地路径。请选择设备共享存储中的文件夹，或使用应用内文件夹。",
+      "androidFolder.folderUnavailable": "无法读写所选文件夹。请选择其他本地目录，或检查系统存储权限。",
+      "androidFolder.requestExpired": "这次文件夹选择已失效。请重新选择。现有会话没有切换。",
+      "androidFolder.selectionFailed": "未能打开工作区。请重试或使用应用内文件夹。现有会话和未发送内容会保留。",`],
+    ['    const en = {', `    const en = {
+      "androidFolder.title": "Workspace folder",
+      "androidFolder.description": "DSH runs commands and edits files in this folder.",
+      "androidFolder.access": "Choosing a phone folder opens system settings for All files access, then the folder picker.",
+      "androidFolder.limits": "Use an app folder without storage permission. Cloud drives and Android/data or Android/obb are unavailable.",
+      "androidFolder.choose": "Choose phone folder",
+      "androidFolder.appFolder": "Use app folder",
+      "androidFolder.permissionDenied": "All files access was not allowed. Retry and enable it in Android settings, or use an app folder.",
+      "androidFolder.pickerUnavailable": "No system folder picker is available. Enable or install a file manager, or use an app folder.",
+      "androidFolder.settingsUnavailable": "Storage permission settings could not be opened. Allow All files access for DSH in Android settings, or use an app folder.",
+      "androidFolder.unsupportedProvider": "This folder has no local path for running commands. Choose a folder in local shared storage, or use an app folder.",
+      "androidFolder.folderUnavailable": "The selected folder is not readable and writable. Choose another local directory or check storage permissions.",
+      "androidFolder.requestExpired": "This folder request has expired. Choose again. Your existing session was not switched.",
+      "androidFolder.selectionFailed": "The workspace could not be opened. Retry or use an app folder. Your existing session and unsent content remain available.",`],
+  ];
+  if (source.includes(marker)) {
+    if (source.split(marker).length !== 2 || updates.some(([, replacement]) => source.split(replacement).length !== 2)) {
+      throw new Error("dsh Android workspace picker: damaged installed patch");
+    }
+    return;
+  }
+  for (const [anchor, replacement] of updates) {
+    if (source.split(anchor).length !== 2) throw new Error(`dsh Android workspace picker: unsupported anchor (${anchor.slice(0, 80)})`);
+    source = source.replace(anchor, replacement);
+  }
+  await writeFile(filename, `${marker}\n${source}`);
+  console.log("patched: dsh Android UI: native system workspace picker with Controller-owned selection");
+}
+
 async function patchAndroidThemeController(root) {
   const filename = join(root, "node_modules/@deepseek-ai/dsh-client-ui-theme/lib/client.js");
   let source = await readFile(filename, "utf8");
@@ -402,7 +550,9 @@ export async function patchAndroidFrontend(root, { nativeShell = false } = {}) {
     await patchNavigationControllers(root);
     await patchMobileUseSettings(root);
     await patchRuntimeExperience(root);
+    await patchAndroidSettingsUi(root);
     await patchSidebarDestinations(root);
+    await patchAndroidWorkspacePicker(root);
     await patchAndroidThemeController(root);
   }
   const candidates = [...index.matchAll(/<link\s+[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/g)]

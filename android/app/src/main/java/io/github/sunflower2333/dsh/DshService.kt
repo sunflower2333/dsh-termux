@@ -40,7 +40,7 @@ class DshService : Service() {
         super.onCreate()
         activeInstance = this
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, notification(getString(R.string.starting_status)))
+        startForeground(NOTIFICATION_ID, notification(DshUiLanguage.text(this@DshService, R.string.starting_status)))
         createTaskNotifications()
     }
 
@@ -147,7 +147,8 @@ class DshService : Service() {
                 bridge = MobileBridge(this, hostEvents = { event, done ->
                     main.post {
                         val owned = synchronized(mobileBridgeLock) { mobileBridge === bridge }
-                        done(owned && !stopping && !destroyed && taskNotifications.accept(event))
+                        done(if (owned && !stopping && !destroyed) taskNotifications.acceptResponse(event)
+                            else org.json.JSONObject().put("accepted", false))
                     }
                 }, notices = { notice, done ->
                     main.post {
@@ -253,7 +254,7 @@ class DshService : Service() {
                     continue
                 }
                 if (!stopping && !destroyed) {
-                    reportError(getString(R.string.process_exit_error, exitCode), diagnostics)
+                    reportError(DshUiLanguage.text(this@DshService, R.string.process_exit_error, exitCode), diagnostics)
                     broadcast(ACTION_EXITED, exitCode.toString())
                 }
                 return
@@ -283,8 +284,8 @@ class DshService : Service() {
 
     private fun reportError(message: String, diagnostics: StartupDiagnostics) {
         val safeMessage = StartupDiagnostics.sanitize(message)
-        val tail = diagnostics.tail().ifBlank { getString(R.string.no_process_output) }
-        val detail = getString(R.string.startup_failure_details, safeMessage, tail)
+        val tail = diagnostics.tail().ifBlank { DshUiLanguage.text(this@DshService, R.string.no_process_output) }
+        val detail = DshUiLanguage.text(this@DshService, R.string.startup_failure_details, safeMessage, tail)
         runCatching { File(cacheDir, "dsh-startup-error.txt").writeText(detail) }
         broadcast(ACTION_ERROR, detail)
     }
@@ -356,9 +357,9 @@ class DshService : Service() {
     }
 
     private fun taskStatusText(status: RuntimeTaskStatus): String = when {
-        status.running > 0 -> getString(R.string.running_tasks_status, status.running)
-        status.waiting > 0 -> getString(R.string.waiting_tasks_status, status.waiting)
-        else -> getString(R.string.running_status)
+        status.running > 0 -> DshUiLanguage.text(this@DshService, R.string.running_tasks_status, status.running)
+        status.waiting > 0 -> DshUiLanguage.text(this@DshService, R.string.waiting_tasks_status, status.waiting)
+        else -> DshUiLanguage.text(this@DshService, R.string.running_status)
     }
 
     private fun notification(text: String): Notification {
@@ -375,21 +376,23 @@ class DshService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_service)
-            .setContentTitle(getString(R.string.app_name))
+            .setGroup(RuntimeTaskNotifications.RUNNING_GROUP)
+            .setGroupSummary(true)
+            .setContentTitle(DshUiLanguage.text(this@DshService, R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setShowWhen(false)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), getString(R.string.mobile_use_pause), pause).build())
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), getString(R.string.stop), stop).build())
+            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), DshUiLanguage.text(this@DshService, R.string.mobile_use_pause), pause).build())
+            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_service), DshUiLanguage.text(this@DshService, R.string.stop), stop).build())
             .build()
     }
 
     private fun createNotificationChannel() {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, getString(R.string.channel_name), NotificationManager.IMPORTANCE_LOW).apply {
-            description = getString(R.string.channel_description)
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, DshUiLanguage.text(this@DshService, R.string.channel_name), NotificationManager.IMPORTANCE_LOW).apply {
+            description = DshUiLanguage.text(this@DshService, R.string.channel_description)
         })
     }
 
@@ -409,6 +412,21 @@ class DshService : Service() {
         @Volatile internal var runtimeTaskStatus = RuntimeTaskStatus()
         @Volatile private var activeInstance: DshService? = null
         @Volatile private var uiForeground = false
+
+        internal fun refreshUiLanguage() {
+            activeInstance?.let { service -> service.main.post {
+                if (!service.destroyed) { service.createNotificationChannel(); service.taskNotifications.refreshLanguage() }
+            } }
+        }
+
+        internal fun submitNotificationReply(ticket: String, text: String, complete: () -> Unit) {
+            val service = activeInstance
+            if (service == null) { complete(); return }
+            service.main.post {
+                try { if (!service.destroyed && !service.stopping && service.process?.isAlive == true) service.taskNotifications.enqueueReply(ticket, text) }
+                finally { complete() }
+            }
+        }
 
         internal fun setUiForeground(value: Boolean) {
             uiForeground = value

@@ -18,8 +18,10 @@ import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -72,6 +74,12 @@ class MainActivity : Activity() {
     private var pendingConfigurationExport = false
     private var pendingNotificationSession: String? = null
     private var notificationNavigationPending = false
+    private var workspaceRequest: WorkspaceRequest? = null
+    private var workspaceDeliveryPending = false
+    private var androidSettingsPortInstalled = false
+    private val androidSettingsBridge by lazy { AndroidSettingsBridge(this, webView) {
+        !terminalError && readyHostConfirmed && themeReadAllowed && WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)
+    } }
     private val webDiagnostics by lazy { StartupDiagnostics(File(cacheDir, "dsh-webview.log")) }
     // Keep the callback behind an Any-typed slot: OnBackInvokedCallback was
     // introduced in API 33 while this client still supports API 30.
@@ -84,11 +92,20 @@ class MainActivity : Activity() {
                     if (!LocalUrl.isAllowed(value)) return
                     val reload = terminalError || lastReadyLaunchUrl != value ||
                         !WebNavigation.isCurrentOrigin(webView.url, value)
+                    if (reload) {
+                        // Revoke the old document before adopting READY: loadUrl
+                        // schedules onPageStarted later, leaving a queued-port gap.
+                        androidSettingsBridge.invalidate()
+                        androidSettingsPortInstalled = false
+                        closeThemePorts()
+                        themeReadAllowed = false
+                    }
                     terminalError = false
                     lastErrorMessage = null
                     errorBar.visibility = View.GONE
                     // Request interception runs on WebView's IO thread.
                     lastReadyLaunchUrl = value
+                    if (workspaceRequest?.readyUrl?.let { it != value } == true) clearWorkspaceRequest()
                     readyHostConfirmed = true
                     // Reuse the restored page/history when the same server
                     // and authentication token are still alive.
@@ -105,7 +122,7 @@ class MainActivity : Activity() {
                 DshService.ACTION_ERROR -> showError(value)
                 DshService.ACTION_EXITED -> {
                     readyHostConfirmed = false
-                    if (!terminalError && value != "stopped") showError(getString(R.string.exited_status))
+                    if (!terminalError && value != "stopped") showError(DshUiLanguage.text(this@MainActivity, R.string.exited_status))
                 }
             }
         }
@@ -127,6 +144,7 @@ class MainActivity : Activity() {
         configureSystemBars()
         restoreWebState(savedInstanceState)
         restoreFileOperations(savedInstanceState)
+        restoreWorkspaceRequest(savedInstanceState)
         pendingNotificationSession = savedInstanceState?.getString(STATE_NOTIFICATION_SESSION)
         consumeNotificationIntent(intent)
         savedInstanceState?.getString(STATE_ERROR)?.let { showError(it) }
@@ -167,9 +185,11 @@ class MainActivity : Activity() {
         configureSystemBars()
         publishSystemUiMode()
         DshService.setUiForeground(true)
+        androidSettingsBridge.onResume()
     }
 
     override fun onPause() {
+        androidSettingsBridge.onPause()
         DshService.setUiForeground(false)
         super.onPause()
     }
@@ -188,7 +208,7 @@ class MainActivity : Activity() {
         // An old OS PendingIntent may outlive the process that issued its
         // ticket. Never silently retain a different queued session target.
         pendingNotificationSession = target
-        if (target == null) Toast.makeText(this, R.string.notification_session_unavailable, Toast.LENGTH_LONG).show()
+        if (target == null) Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.notification_session_unavailable), Toast.LENGTH_LONG).show()
         intent.removeExtra(NotificationSessionTargets.EXTRA_TICKET)
         // Saved-instance state retains a verified pending target across
         // recreation; the consumed Intent must not be handled a second time.
@@ -244,7 +264,7 @@ class MainActivity : Activity() {
                     } catch (_: ActivityNotFoundException) {
                         pendingFileSelection = null
                         callback.onReceiveValue(null)
-                        Toast.makeText(this@MainActivity, R.string.file_picker_unavailable, Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this@MainActivity, DshUiLanguage.text(this@MainActivity, R.string.file_picker_unavailable), Toast.LENGTH_SHORT).show()
                         true
                     }
                 }
@@ -259,6 +279,8 @@ class MainActivity : Activity() {
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                    androidSettingsBridge.invalidate()
+                    androidSettingsPortInstalled = false
                     closeThemePorts()
                     themeReadAllowed = WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)
                     super.onPageStarted(view, url, favicon)
@@ -271,14 +293,21 @@ class MainActivity : Activity() {
                         ByteArrayInputStream(ByteArray(0)))
                 }
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (request.isForMainFrame) {
+                        WebNavigation.workspaceRequestId(request.url.toString(), view.url, lastReadyLaunchUrl)?.let { id ->
+                            val touched = androidSettingsBridge.consumeRecentUserGesture()
+                            chooseWorkspace(id, touched)
+                            return true
+                        }
+                    }
                     if (request.isForMainFrame && WebNavigation.isRuntimeSettingsRequest(
                             request.url.toString(), view.url, lastReadyLaunchUrl)) {
-                        startActivity(Intent(this@MainActivity, RuntimeSettingsActivity::class.java))
+                        openAndroidWebSettings("runtime")
                         return true
                     }
                     if (request.isForMainFrame && WebNavigation.isMobileControlRequest(
                             request.url.toString(), view.url, lastReadyLaunchUrl)) {
-                        startActivity(Intent(this@MainActivity, MobileControlActivity::class.java))
+                        openAndroidWebSettings("mobile")
                         return true
                     }
                     if (request.isForMainFrame && WebNavigation.isConfigurationRequest(
@@ -298,6 +327,7 @@ class MainActivity : Activity() {
                 override fun onPageFinished(view: WebView, url: String) {
                     super.onPageFinished(view, url)
                     if (!terminalError && WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)) {
+                        installAndroidSettingsPort(url)
                         installThemePort(url)
                         publishSystemUiMode()
                         downloadPageReady = true
@@ -307,13 +337,14 @@ class MainActivity : Activity() {
                 }
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                     super.onReceivedError(view, request, error)
-                    if (request.isForMainFrame) showError(error.description?.toString() ?: getString(R.string.web_load_error))
+                    if (request.isForMainFrame) showError(error.description?.toString() ?: DshUiLanguage.text(this@MainActivity, R.string.web_load_error))
                 }
                 override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                     super.onReceivedHttpError(view, request, response)
-                    if (request.isForMainFrame) showError(getString(R.string.web_http_error, response.statusCode))
+                    if (request.isForMainFrame) showError(DshUiLanguage.text(this@MainActivity, R.string.web_http_error, response.statusCode))
                 }
             }
+            setOnTouchListener { _, event -> androidSettingsBridge.onWebViewTouch(event); false }
         }
         root.addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         errorBar = TextView(this).apply {
@@ -324,7 +355,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(255, 236, 236))
             setPadding(dp(16), dp(12), dp(16), dp(12))
             minHeight = dp(48)
-            contentDescription = getString(R.string.error_details)
+            contentDescription = DshUiLanguage.text(this@MainActivity, R.string.error_details)
             setOnClickListener { showErrorDetails() }
         }
         root.addView(errorBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
@@ -405,6 +436,19 @@ class MainActivity : Activity() {
             "window.__DSH_ANDROID_SYSTEM_UI_MODE__($dark);})();", null)
     }
 
+    private fun installAndroidSettingsPort(url: String) {
+        if (androidSettingsPortInstalled || terminalError || !readyHostConfirmed || !themeReadAllowed ||
+            !WebNavigation.isCurrentOrigin(url, lastReadyLaunchUrl)) return
+        androidSettingsBridge.install(url)
+        androidSettingsPortInstalled = true
+    }
+
+    private fun openAndroidWebSettings(section: String) {
+        if (!readyHostConfirmed || !WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) return
+        webView.evaluateJavascript("(function(){if(typeof window.__DSH_ANDROID_OPEN_SETTINGS__==='function')" +
+            "window.__DSH_ANDROID_OPEN_SETTINGS__(${JSONObject.quote(section)});})();", null)
+    }
+
     /** Reveal the real application, after its own plugin boot DOM has gone away. */
     private fun awaitDshUi() {
         val generation = ++uiCheckGeneration
@@ -412,7 +456,7 @@ class MainActivity : Activity() {
         fun check() {
             if (generation != uiCheckGeneration || terminalError || isFinishing || isDestroyed) return
             if (android.os.SystemClock.uptimeMillis() >= deadline) {
-                showError(getString(R.string.web_boot_timeout, webDiagnostics.tail()))
+                showError(DshUiLanguage.text(this@MainActivity, R.string.web_boot_timeout, webDiagnostics.tail()))
                 return
             }
             webView.evaluateJavascript(UI_STATE_SCRIPT) { value ->
@@ -423,9 +467,12 @@ class MainActivity : Activity() {
                     showError(failure)
                 } else if (state?.optBoolean("ready") == true) {
                     dshUiVisible = true
+                    installAndroidSettingsPort(webView.url ?: return@evaluateJavascript)
+                    androidSettingsBridge.onReady()
                     configureSystemBars()
                     webView.visibility = View.VISIBLE
                     openNotificationSession()
+                    deliverWorkspaceResult()
                 } else {
                     handler.postDelayed({ check() }, 200)
                 }
@@ -464,7 +511,7 @@ class MainActivity : Activity() {
                 else {
                     pendingNotificationSession = null
                     notificationNavigationPending = false
-                    Toast.makeText(this, R.string.notification_session_unavailable, Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.notification_session_unavailable), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -497,13 +544,30 @@ class MainActivity : Activity() {
             }
         }
         if (savedInstanceState.getBoolean(STATE_FILE_OPERATION_INTERRUPTED)) {
-            Toast.makeText(this, R.string.file_operation_interrupted, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.file_operation_interrupted), Toast.LENGTH_LONG).show()
         }
     }
 
     @Deprecated("Activity result compatibility for the native WebView file picker")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == WORKSPACE_PERMISSION_REQUEST) {
+            val current = workspaceRequest ?: return
+            if (current.stage != "permission") return
+            if (!workspaceOriginCurrent(current)) { clearWorkspaceRequest(); return }
+            if (Environment.isExternalStorageManager()) launchWorkspacePicker(current)
+            else finishWorkspaceRequest(current, "error", "permission-denied")
+            return
+        }
+        if (requestCode == WORKSPACE_FOLDER_REQUEST) {
+            val current = workspaceRequest ?: return
+            if (current.stage != "picker") return
+            if (!workspaceOriginCurrent(current)) { clearWorkspaceRequest(); return }
+            if (resultCode != RESULT_OK) finishWorkspaceRequest(current, "cancelled", null)
+            else if (data?.data == null) finishWorkspaceRequest(current, "error", "folder-unavailable")
+            else validateWorkspaceFolder(current, data.data!!)
+            return
+        }
         if (requestCode == CONFIGURATION_EXPORT_REQUEST) {
             val expected = pendingConfigurationExport
             pendingConfigurationExport = false
@@ -519,13 +583,13 @@ class MainActivity : Activity() {
                 return
             }
             if (pendingDownload == null) {
-                Toast.makeText(this, R.string.file_operation_interrupted, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.file_operation_interrupted), Toast.LENGTH_LONG).show()
                 return
             }
             pendingDownloadDestination = data?.data?.takeIf { it.scheme == "content" }
             if (pendingDownloadDestination == null) {
                 pendingDownload = null
-                Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_failed), Toast.LENGTH_LONG).show()
                 return
             }
             // A restored Activity waits for a fresh Service READY, then the
@@ -544,6 +608,123 @@ class MainActivity : Activity() {
         pendingFileSelection = null
     }
 
+    /** The DSH WebUI owns consent and presentation; Android opens only system surfaces. */
+    private fun chooseWorkspace(requestId: String, userGesture: Boolean) {
+        if (workspaceRequest != null || !readyHostConfirmed || !dshUiVisible ||
+            !WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)) return
+        val current = WorkspaceRequest(requestId, lastReadyLaunchUrl ?: return)
+        workspaceRequest = current
+        if (!userGesture) { finishWorkspaceRequest(current, "error", "gesture-required"); return }
+        if (Environment.isExternalStorageManager()) { launchWorkspacePicker(current); return }
+        current.stage = "permission"
+        val appSettings = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
+        try { startActivityForResult(appSettings, WORKSPACE_PERMISSION_REQUEST) }
+        catch (_: ActivityNotFoundException) {
+            try { startActivityForResult(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), WORKSPACE_PERMISSION_REQUEST) }
+            catch (_: ActivityNotFoundException) { finishWorkspaceRequest(current, "error", "settings-unavailable") }
+            catch (_: SecurityException) { finishWorkspaceRequest(current, "error", "settings-unavailable") }
+        } catch (_: SecurityException) { finishWorkspaceRequest(current, "error", "settings-unavailable") }
+    }
+
+    private fun workspaceOriginCurrent(current: WorkspaceRequest) = workspaceRequest === current &&
+        current.readyUrl == lastReadyLaunchUrl && WebNavigation.isCurrentOrigin(webView.url, lastReadyLaunchUrl)
+
+    private fun launchWorkspacePicker(current: WorkspaceRequest) {
+        if (!workspaceOriginCurrent(current)) { clearWorkspaceRequest(); return }
+        if (!Environment.isExternalStorageManager()) { finishWorkspaceRequest(current, "error", "permission-denied"); return }
+        current.stage = "picker"
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            // SAF is used to choose the directory, never as native filesystem authority.
+            // Do not retain a redundant persistable grant beyond this selection.
+        }
+        try { startActivityForResult(intent, WORKSPACE_FOLDER_REQUEST) }
+        catch (_: ActivityNotFoundException) { finishWorkspaceRequest(current, "error", "picker-unavailable") }
+        catch (_: SecurityException) { finishWorkspaceRequest(current, "error", "picker-unavailable") }
+    }
+
+    private fun validateWorkspaceFolder(current: WorkspaceRequest, uri: Uri) {
+        current.stage = "validating"
+        current.treeUri = uri.toString()
+        Thread({
+            val result = runCatching { WorkspaceStorage.validate(applicationContext, uri) }
+            handler.post {
+                if (isFinishing || isDestroyed || workspaceRequest !== current) return@post
+                if (!workspaceOriginCurrent(current)) { clearWorkspaceRequest(); return@post }
+                val folder = result.getOrNull()
+                if (folder != null) { current.path = folder.path; finishWorkspaceRequest(current, "selected", null) }
+                else finishWorkspaceRequest(current, "error", when ((result.exceptionOrNull() as? WorkspaceStorageException)?.failure) {
+                    WorkspaceStorageFailure.PERMISSION_REQUIRED -> "permission-denied"
+                    WorkspaceStorageFailure.UNSUPPORTED_PROVIDER -> "unsupported-provider"
+                    WorkspaceStorageFailure.NOT_WRITABLE -> "folder-not-writable"
+                    else -> "folder-unavailable"
+                })
+            }
+        }, "dsh-workspace-check").apply { isDaemon = true }.start()
+    }
+
+    private fun finishWorkspaceRequest(current: WorkspaceRequest, status: String, error: String?) {
+        if (workspaceRequest !== current) return
+        current.stage = "result"
+        current.status = status
+        current.error = error
+        current.treeUri = null
+        deliverWorkspaceResult()
+    }
+
+    /** A true return means the existing frontend queued its own normal workspace flow. */
+    private fun deliverWorkspaceResult() {
+        val current = workspaceRequest ?: return
+        if (current.stage != "result" || workspaceDeliveryPending || !dshUiVisible ||
+            !WorkspaceSelectionPolicy.canDeliver(current.id, current.readyUrl, lastReadyLaunchUrl,
+                webView.url, readyHostConfirmed)) return
+        if (current.status == "selected" && !Environment.isExternalStorageManager()) {
+            current.status = "error"; current.error = "permission-denied"; current.path = null
+        }
+        workspaceDeliveryPending = true
+        val deadline = android.os.SystemClock.uptimeMillis() + 15_000
+        fun deliver() {
+            if (isFinishing || isDestroyed || workspaceRequest !== current) { workspaceDeliveryPending = false; return }
+            if (!WorkspaceSelectionPolicy.canDeliver(current.id, current.readyUrl, lastReadyLaunchUrl, webView.url, readyHostConfirmed)) {
+                workspaceDeliveryPending = false
+                if (current.readyUrl != lastReadyLaunchUrl) clearWorkspaceRequest()
+                return
+            }
+            val call = if (current.status == "selected" && current.path != null)
+                "typeof window.__DSH_ANDROID_SELECT_WORKSPACE__==='function' && window.__DSH_ANDROID_SELECT_WORKSPACE__(" +
+                    "${JSONObject.quote(current.path)},${JSONObject.quote(current.id)})===true"
+            else "typeof window.__DSH_ANDROID_WORKSPACE_RESULT__==='function' && window.__DSH_ANDROID_WORKSPACE_RESULT__(" +
+                "${JSONObject.quote(current.id)},${JSONObject.quote(current.status)},${current.error?.let(JSONObject::quote) ?: "null"})===true"
+            webView.evaluateJavascript("(function(){try{return $call;}catch(error){return false;}})();") { value ->
+                if (isFinishing || isDestroyed || workspaceRequest !== current) return@evaluateJavascript
+                if (value == "true") clearWorkspaceRequest()
+                else if (android.os.SystemClock.uptimeMillis() < deadline) handler.postDelayed({ deliver() }, 250)
+                else {
+                    clearWorkspaceRequest()
+                    // The original request may have been cancelled by navigation; never reopen it.
+                }
+            }
+        }
+        deliver()
+    }
+
+    private fun clearWorkspaceRequest() { workspaceRequest = null; workspaceDeliveryPending = false }
+
+    private fun restoreWorkspaceRequest(savedInstanceState: Bundle?) {
+        val state = savedInstanceState?.getBundle(STATE_WORKSPACE_REQUEST) ?: return
+        val id = state.getString("id")?.takeIf(WorkspaceSelectionPolicy::validRequestId) ?: return
+        val ready = state.getString("ready")?.takeIf(LocalUrl::isAllowed) ?: return
+        val stage = state.getString("stage")?.takeIf { it in setOf("permission", "picker", "validating", "result") } ?: return
+        val current = WorkspaceRequest(id, ready, stage, state.getString("path"), state.getString("status") ?: "cancelled",
+            state.getString("error"), state.getString("tree"))
+        workspaceRequest = current
+        if (stage == "validating") {
+            val uri = current.treeUri?.let(Uri::parse)
+            if (uri == null) finishWorkspaceRequest(current, "error", "selection-failed")
+            else validateWorkspaceFolder(current, uri)
+        }
+    }
+
     private fun savePendingDownload() {
         val request = pendingDownload ?: return
         val destination = pendingDownloadDestination ?: return
@@ -551,14 +732,14 @@ class MainActivity : Activity() {
         if (!WebNavigation.isCurrentOrigin(request.url, lastReadyLaunchUrl)) {
             pendingDownload = null
             pendingDownloadDestination = null
-            Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_failed), Toast.LENGTH_LONG).show()
             return
         }
         if (!downloadPageReady) return
         pendingDownload = null
         pendingDownloadDestination = null
         if (!AndroidDownloadPolicy.isAllowed(request.url, webView.url, lastReadyLaunchUrl)) {
-            Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_failed), Toast.LENGTH_LONG).show()
             return
         }
         // Capture the current cookie only now, and never put it in savedState.
@@ -567,21 +748,21 @@ class MainActivity : Activity() {
                 if (isFinishing || isDestroyed) return@save
                 when (result) {
                     AndroidDownloads.Result.SAVED -> Toast.makeText(this,
-                        getString(R.string.download_saved, request.filename), Toast.LENGTH_LONG).show()
+                        DshUiLanguage.text(this@MainActivity, R.string.download_saved, request.filename), Toast.LENGTH_LONG).show()
                     AndroidDownloads.Result.FAILED -> Toast.makeText(this,
-                        R.string.download_failed, Toast.LENGTH_LONG).show()
+                        DshUiLanguage.text(this@MainActivity, R.string.download_failed), Toast.LENGTH_LONG).show()
                     AndroidDownloads.Result.CANCELLED -> Unit
                 }
-            }) Toast.makeText(this, R.string.download_busy, Toast.LENGTH_SHORT).show()
+            }) Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_busy), Toast.LENGTH_SHORT).show()
     }
 
     private fun chooseDownloadDestination(url: String, userAgent: String?, disposition: String?, mimeType: String?) {
         if (!AndroidDownloadPolicy.isAllowed(url, webView.url, lastReadyLaunchUrl)) {
-            Toast.makeText(this, R.string.download_local_only, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_local_only), Toast.LENGTH_LONG).show()
             return
         }
         if (pendingDownload != null || downloads.isRunning) {
-            Toast.makeText(this, R.string.download_busy, Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_busy), Toast.LENGTH_SHORT).show()
             return
         }
         val filename = AndroidDownloadPolicy.filename(URLUtil.guessFileName(url, disposition, mimeType))
@@ -597,7 +778,7 @@ class MainActivity : Activity() {
             startActivityForResult(intent, DOWNLOAD_DESTINATION_REQUEST)
         } catch (_: ActivityNotFoundException) {
             pendingDownload = null
-            Toast.makeText(this, R.string.file_picker_unavailable, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.file_picker_unavailable), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -609,7 +790,7 @@ class MainActivity : Activity() {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, uri))
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, R.string.external_browser_unavailable, Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.external_browser_unavailable), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -629,7 +810,7 @@ class MainActivity : Activity() {
                 }
                 if (intent.resolveActivity(packageManager) == null) continue
                 try {
-                    startActivity(Intent.createChooser(intent, getString(R.string.configuration_open_with)))
+                    startActivity(Intent.createChooser(intent, DshUiLanguage.text(this@MainActivity, R.string.configuration_open_with)))
                     return
                 } catch (_: ActivityNotFoundException) { }
             }
@@ -645,13 +826,13 @@ class MainActivity : Activity() {
             pendingConfigurationExport = true
             try {
                 startActivityForResult(intent, CONFIGURATION_EXPORT_REQUEST)
-                Toast.makeText(this, R.string.configuration_save_copy, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.configuration_save_copy), Toast.LENGTH_LONG).show()
             } catch (_: ActivityNotFoundException) {
                 pendingConfigurationExport = false
-                Toast.makeText(this, R.string.file_picker_unavailable, Toast.LENGTH_LONG).show()
+                Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.file_picker_unavailable), Toast.LENGTH_LONG).show()
             }
         } catch (_: Exception) {
-            Toast.makeText(this, R.string.configuration_open_failed, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.configuration_open_failed), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -677,8 +858,8 @@ class MainActivity : Activity() {
             }.isSuccess
             handler.post {
                 if (!isFinishing && !isDestroyed) Toast.makeText(this,
-                    if (saved) getString(R.string.download_saved, ConfigurationDocumentPolicy.FILENAME)
-                    else getString(R.string.download_failed), Toast.LENGTH_LONG).show()
+                    if (saved) DshUiLanguage.text(this@MainActivity, R.string.download_saved, ConfigurationDocumentPolicy.FILENAME)
+                    else DshUiLanguage.text(this@MainActivity, R.string.download_failed), Toast.LENGTH_LONG).show()
             }
         }, "dsh-configuration-copy").apply { isDaemon = true }.start()
     }
@@ -690,11 +871,11 @@ class MainActivity : Activity() {
         if (pendingDownloadDestination != null) {
             pendingDownload = null
             pendingDownloadDestination = null
-            Toast.makeText(this, R.string.download_failed, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.download_failed), Toast.LENGTH_LONG).show()
         }
         ++uiCheckGeneration
         lastErrorMessage = StartupDiagnostics.sanitize(message)
-        errorBar.text = getString(R.string.error_summary, lastErrorMessage?.lineSequence()?.firstOrNull().orEmpty())
+        errorBar.text = DshUiLanguage.text(this@MainActivity, R.string.error_summary, lastErrorMessage?.lineSequence()?.firstOrNull().orEmpty())
         errorBar.visibility = View.VISIBLE
         // Existing DSH content and genuine WebView error pages remain visible.
         if (webView.url != null && webView.url != "about:blank") webView.visibility = View.VISIBLE
@@ -709,14 +890,14 @@ class MainActivity : Activity() {
         }
         val scroll = ScrollView(this).apply { addView(text) }
         AlertDialog.Builder(this)
-            .setTitle(R.string.error_details)
+            .setTitle(DshUiLanguage.text(this@MainActivity, R.string.error_details))
             .setView(scroll)
-            .setPositiveButton(R.string.copy_error) { _, _ ->
+            .setPositiveButton(DshUiLanguage.text(this@MainActivity, R.string.copy_error)) { _, _ ->
                 (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager)
-                    .setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), message))
-                Toast.makeText(this, R.string.error_copied, Toast.LENGTH_SHORT).show()
+                    .setPrimaryClip(ClipData.newPlainText(DshUiLanguage.text(this@MainActivity, R.string.app_name), message))
+                Toast.makeText(this, DshUiLanguage.text(this@MainActivity, R.string.error_copied), Toast.LENGTH_SHORT).show()
             }
-            .setNegativeButton(android.R.string.cancel, null)
+            .setNegativeButton(DshUiLanguage.text(this@MainActivity, android.R.string.cancel), null)
             .show()
     }
 
@@ -781,9 +962,24 @@ class MainActivity : Activity() {
             pendingFileSelection != null || downloads.isRunning)
         outState.putBoolean(STATE_CONFIGURATION_EXPORT, pendingConfigurationExport)
         pendingNotificationSession?.let { outState.putString(STATE_NOTIFICATION_SESSION, it) }
+        workspaceRequest?.let { request ->
+            outState.putBundle(STATE_WORKSPACE_REQUEST, Bundle().apply {
+                putString("id", request.id); putString("ready", request.readyUrl); putString("stage", request.stage)
+                putString("path", request.path); putString("status", request.status); putString("error", request.error)
+                putString("tree", request.treeUri)
+            })
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        androidSettingsBridge.onRequestPermissionsResult(requestCode)
     }
 
     override fun onDestroy() {
+        androidSettingsBridge.invalidate()
+        androidSettingsPortInstalled = false
+        clearWorkspaceRequest()
         themeReadAllowed = false
         closeThemePorts()
         pendingDownload = null
@@ -809,6 +1005,9 @@ class MainActivity : Activity() {
         private const val FILE_SELECTION_REQUEST = 43
         private const val DOWNLOAD_DESTINATION_REQUEST = 44
         private const val CONFIGURATION_EXPORT_REQUEST = 45
+        private const val WORKSPACE_PERMISSION_REQUEST = 49
+        private const val WORKSPACE_FOLDER_REQUEST = 50
+        private const val STATE_WORKSPACE_REQUEST = "dsh.workspace.request"
         private val BACK_SCRIPT = """
             (function () {
                 try {
@@ -826,4 +1025,7 @@ class MainActivity : Activity() {
             })();
         """.trimIndent()
     }
+
+    private data class WorkspaceRequest(val id: String, val readyUrl: String, var stage: String = "permission",
+        var path: String? = null, var status: String = "cancelled", var error: String? = null, var treeUri: String? = null)
 }

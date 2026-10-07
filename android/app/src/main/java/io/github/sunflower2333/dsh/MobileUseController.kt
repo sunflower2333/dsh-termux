@@ -36,7 +36,7 @@ object MobileUseController {
         }
     }
 
-    /** Called by a genuine native UI gesture, never by a WebView or tool RPC. */
+    /** Called only after a genuine user gesture, never a tool RPC or unguarded WebView message. */
     fun resumeFromUser(context: Context): JSONObject {
         synchronized(lock) {
             generation++
@@ -100,6 +100,7 @@ object MobileUseController {
             is MobileCommand.Click -> command.sessionId
             is MobileCommand.Type -> command.sessionId
             is MobileCommand.Swipe -> command.sessionId
+            is MobileCommand.Scroll -> command.sessionId
             is MobileCommand.Back -> command.sessionId
             is MobileCommand.ListApps -> command.sessionId
             is MobileCommand.OpenApp -> command.sessionId

@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -75,6 +76,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-started local DeepSeek Harness coding assistant server, kept available while switching apps or running a user task." />
         </service>
+        <receiver
+            android:name=".NotificationReplyReceiver"
+            android:exported="false"
+            android:permission="io.github.sunflower2333.dsh.permission.INTERNAL" />
         <provider
             android:name=".ConfigurationDocumentProvider"
             android:authorities="${applicationId}.configuration"

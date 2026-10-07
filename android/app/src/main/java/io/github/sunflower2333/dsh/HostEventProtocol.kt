@@ -9,11 +9,17 @@ internal data class HostEvent(
     val sessionId: String? = null,
     val kind: String? = null,
     val eventId: String? = null,
+    val replyTicket: String? = null,
+    val replyAck: String? = null,
+    val noticeTitle: String? = null,
+    val noticeMessage: String? = null,
+    val sessions: List<RuntimeSessionSummary>? = null,
+    val sessionsComplete: Boolean? = null,
 )
 
 internal object HostEventProtocol {
     const val PATH = "/android/events"
-    private val fields = setOf("version", "epoch", "sequence", "running", "waiting", "sessionId", "kind", "eventId")
+    private val fields = setOf("version", "epoch", "sequence", "running", "waiting", "sessionId", "kind", "eventId", "replyTicket", "replyAck", "noticeTitle", "noticeMessage", "sessions", "sessionsComplete")
     private val epochPattern = Regex("[A-Za-z0-9_-]{1,64}")
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,160}")
 
@@ -37,7 +43,25 @@ internal object HostEventProtocol {
             require(sessionId != null && idPattern.matches(sessionId)) { "Invalid host session" }
             require(eventId != null && idPattern.matches(eventId)) { "Invalid host event ID" }
         }
-        return HostEvent(epoch, sequence, running.toInt(), waiting.toInt(), sessionId, kind, eventId)
+        val replyTicket = values["replyTicket"] as? String
+        if (values.containsKey("replyTicket")) require(kind == "question" && replyTicket != null && idPattern.matches(replyTicket)) { "Invalid reply target" }
+        val replyAck = values["replyAck"] as? String
+        if (values.containsKey("replyAck")) require(replyAck != null && idPattern.matches(replyAck)) { "Invalid reply acknowledgement" }
+        val noticeTitle = values["noticeTitle"] as? String
+        val noticeMessage = values["noticeMessage"] as? String
+        if (values.containsKey("noticeTitle") || values.containsKey("noticeMessage")) {
+            require(kind == "question" && replyTicket != null && noticeTitle != null && noticeTitle.length in 1..64 && noticeMessage != null && noticeMessage.length in 1..1024 && NotificationReplyText.valid(noticeTitle) && NotificationReplyText.valid(noticeMessage)) { "Invalid requested notification" }
+        }
+        val sessions = if (values.containsKey("sessions")) {
+            val list = values["sessions"] as? List<*> ?: throw IllegalArgumentException("Invalid session summaries")
+            require(list.size <= 64 && values["sessionsComplete"] is Boolean) { "Invalid session summary count" }
+            list.map { RuntimeSessionSummary.parse(it as? Map<*, *> ?: throw IllegalArgumentException("Invalid session summary")) }.also {
+                require(it.map(RuntimeSessionSummary::sessionId).toSet().size == it.size) { "Duplicate session summary" }
+            }
+        } else null
+        require(!values.containsKey("sessionsComplete") || sessions != null) { "Incomplete session summaries" }
+        return HostEvent(epoch, sequence, running.toInt(), waiting.toInt(), sessionId, kind, eventId,
+            replyTicket, replyAck, noticeTitle, noticeMessage, sessions, values["sessionsComplete"] as? Boolean)
     }
 
     private fun integer(value: Any?): Long = when (value) {
@@ -60,6 +84,10 @@ internal class HostEventState {
         private set
     var waiting: Int = 0
         private set
+    var sessions: List<RuntimeSessionSummary> = emptyList()
+        private set
+    var sessionsComplete = false
+        private set
     val pending = LinkedHashMap<String, HostEvent>()
     val completed = LinkedHashMap<String, HostEvent>()
     private val suppressedCompletions = LinkedHashMap<String, String>()
@@ -73,6 +101,8 @@ internal class HostEventState {
             epoch = event.epoch
             sequence = 0
             pending.clear()
+            sessions = emptyList()
+            sessionsComplete = false
             completed.clear()
             suppressedCompletions.clear()
             completionSuppressionOverflow = false
@@ -85,6 +115,7 @@ internal class HostEventState {
         sequence = event.sequence
         running = event.running
         waiting = event.waiting
+        if (event.sessions != null) { sessions = event.sessions; sessionsComplete = event.sessionsComplete == true }
         when (event.kind) {
             "approval", "question" -> pending[event.eventId!!] = event
             "resolved" -> {
@@ -112,6 +143,8 @@ internal class HostEventState {
         running = 0
         waiting = 0
         pending.clear()
+        sessions = emptyList()
+        sessionsComplete = false
     }
 
     fun setForeground(value: Boolean) {

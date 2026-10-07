@@ -136,6 +136,14 @@ jobs:
           set -euo pipefail
           bash scripts/stage-android-runtime.sh
 
+      - name: Verify Android workspace picker and Web settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          staged_dsh="$GITHUB_WORKSPACE/build/android-runtime/staged/runtime/dsh"
+          node scripts/test-android-workspace-picker.mjs "$staged_dsh"
+          node scripts/test-android-settings-ui.mjs "$staged_dsh"
+
       - name: Assemble release APK
         working-directory: android
         run: |

@@ -1,7 +1,7 @@
 package io.github.sunflower2333.dsh
 
 internal enum class MobileOperation {
-    STATUS, OBSERVE, CLICK, TYPE, SWIPE, BACK, STOP, LIST_APPS, OPEN_APP
+    STATUS, OBSERVE, CLICK, TYPE, SWIPE, SCROLL, BACK, STOP, LIST_APPS, OPEN_APP
 }
 
 internal sealed interface MobileCommand {
@@ -35,8 +35,10 @@ internal sealed interface MobileCommand {
     ) : MobileCommand
 
     data class Back(val sessionId: String, val observationId: String) : MobileCommand
+    data class Scroll(val sessionId: String, val observationId: String, val nodeId: String,
+        val direction: String) : MobileCommand
     data class ListApps(val sessionId: String) : MobileCommand
-    data class OpenApp(val sessionId: String, val observationId: String, val packageName: String) : MobileCommand
+    data class OpenApp(val sessionId: String, val observationId: String?, val packageName: String) : MobileCommand
 
     object Stop : MobileCommand
 }
@@ -58,6 +60,7 @@ internal object MobileProtocol {
         "${PATH_PREFIX}click" -> MobileOperation.CLICK
         "${PATH_PREFIX}type" -> MobileOperation.TYPE
         "${PATH_PREFIX}swipe" -> MobileOperation.SWIPE
+        "${PATH_PREFIX}scroll" -> MobileOperation.SCROLL
         "${PATH_PREFIX}back" -> MobileOperation.BACK
         "${PATH_PREFIX}stop" -> MobileOperation.STOP
         "${PATH_PREFIX}list_apps" -> MobileOperation.LIST_APPS
@@ -73,6 +76,7 @@ internal object MobileProtocol {
             MobileOperation.TYPE -> sessionFields + setOf("nodeId", "text")
             MobileOperation.SWIPE -> sessionFields +
                 setOf("fromX", "fromY", "toX", "toY", "durationMs")
+            MobileOperation.SCROLL -> sessionFields + setOf("nodeId", "direction")
             MobileOperation.BACK -> sessionFields
             MobileOperation.LIST_APPS -> setOf("sessionId")
             MobileOperation.OPEN_APP -> sessionFields + "packageName"
@@ -90,7 +94,7 @@ internal object MobileProtocol {
                     fields["screenshot"] as? Boolean
                         ?: invalid("screenshot must be a boolean.")
                 } else {
-                    true
+                    false
                 }
             )
             MobileOperation.CLICK -> parseClick(fields)
@@ -113,9 +117,14 @@ internal object MobileProtocol {
                 requireIdentifier(fields, "sessionId"),
                 requireIdentifier(fields, "observationId")
             )
+            MobileOperation.SCROLL -> MobileCommand.Scroll(requireIdentifier(fields, "sessionId"),
+                requireIdentifier(fields, "observationId"), requireIdentifier(fields, "nodeId"),
+                (fields["direction"] as? String)?.takeIf { it == "forward" || it == "backward" }
+                    ?: invalid("direction must be forward or backward."))
             MobileOperation.LIST_APPS -> MobileCommand.ListApps(requireIdentifier(fields, "sessionId"))
             MobileOperation.OPEN_APP -> MobileCommand.OpenApp(requireIdentifier(fields, "sessionId"),
-                requireIdentifier(fields, "observationId"), MobileLauncherPolicy.requirePackage(fields["packageName"]))
+                if (fields.containsKey("observationId")) requireIdentifier(fields, "observationId") else null,
+                MobileLauncherPolicy.requirePackage(fields["packageName"]))
         }
     }
 

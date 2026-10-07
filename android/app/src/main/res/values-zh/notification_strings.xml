@@ -1,0 +1,9 @@
+<resources>
+    <string name="notification_reply_label">填写回答</string>
+    <string name="notification_reply_action">回复</string>
+    <string name="running_session_channel">正在进行的会话</string>
+    <string name="running_session_title">会话 %1$s</string>
+    <string name="running_session_running">正在运行</string>
+    <string name="running_session_waiting">等待回答或操作确认</string>
+    <string name="running_session_metrics">轮数 %1$s · 步数 %2$s\n会话累计 Token %3$s\n最近结束的调用：非缓存输入 %4$s · 输出 %5$s · 总计 %6$s\n缓存读取 %7$s · 写入 %8$s · 命中 %12$s\n调用平均速度 %9$s tok/s\n上下文 %10$s / %11$s</string>
+</resources>

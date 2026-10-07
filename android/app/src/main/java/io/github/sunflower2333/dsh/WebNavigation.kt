@@ -20,6 +20,17 @@ internal object WebNavigation {
     const val CONFIGURATION_PATH = "/__dsh_android__/open-configuration"
     const val MOBILE_CONTROL_PATH = "/__dsh_android__/mobile-control"
     const val RUNTIME_SETTINGS_PATH = "/__dsh_android__/runtime-settings"
+    const val WORKSPACE_STORAGE_PATH = "/__dsh_android__/choose-workspace"
+
+    /** A bounded request ID binds a returned native folder to its initiating UI. */
+    fun workspaceRequestId(url: String, pageUrl: String?, readyUrl: String?): String? {
+        if (!isCurrentOrigin(url, readyUrl) || !isCurrentOrigin(pageUrl, readyUrl)) return null
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        if (uri.rawPath != WORKSPACE_STORAGE_PATH || uri.rawFragment != null) return null
+        val query = uri.rawQuery ?: return null
+        if (!query.startsWith("request=")) return null
+        return query.removePrefix("request=").takeIf { WorkspaceSelectionPolicy.validRequestId(it) }
+    }
 
     /** One native action, accepted only from the current authenticated DSH page. */
     fun isConfigurationRequest(url: String, pageUrl: String?, readyUrl: String?): Boolean {

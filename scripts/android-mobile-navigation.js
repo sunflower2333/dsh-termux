@@ -8,6 +8,62 @@
   var systemMedia = null;
   var themePort = null;
   var latestTheme = null;
+  var workspaceChooser = null;
+  var workspacePicker = null;
+
+  function backLabel() {
+    // DSH's LocaleRuntime writes the effective UI language to the document.
+    return String(document.documentElement.lang || "").toLowerCase().split("-")[0] === "zh" ? "返回" : "Back";
+  }
+  if (typeof MutationObserver === "function") {
+    new MutationObserver(function () {
+      document.querySelectorAll("[data-dsh-android-back]").forEach(function (button) {
+        button.setAttribute("aria-label", backLabel());
+      });
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
+  }
+
+  function workspacePath(path) {
+    return typeof path === "string" && path.length > 1 && path.length <= 4096 &&
+      path.charAt(0) === "/" && !/[\u0000-\u001f\u007f]/.test(path) &&
+      !path.split("/").some(function (part) { return part === "." || part === ".."; });
+  }
+
+  function workspaceRequest(requestId) {
+    return workspacePicker && workspacePicker.id === requestId && !workspacePicker.accepted &&
+      workspaceChooser && workspacePicker.owner === workspaceChooser;
+  }
+
+  window.__DSH_ANDROID_SELECT_WORKSPACE__ = function (path, requestId) {
+    if (!workspaceRequest(requestId) || !workspacePath(path)) return false;
+    var request = workspacePicker;
+    request.accepted = true;
+    Promise.resolve().then(function () { return request.owner.select(path); }).then(function () {
+      if (workspacePicker !== request || workspaceChooser !== request.owner) return;
+      workspacePicker = null;
+      request.onSuccess();
+    }, function (error) {
+      if (workspacePicker !== request || workspaceChooser !== request.owner) return;
+      workspacePicker = null;
+      request.onError(error instanceof Error ? error.message : String(error));
+    });
+    return true;
+  };
+  window.__DSH_ANDROID_BROWSE_WORKSPACE__ = function (requestId) {
+    if (!workspaceRequest(requestId)) return false;
+    var request = workspacePicker;
+    workspacePicker = null;
+    request.onBrowse();
+    return true;
+  };
+  window.__DSH_ANDROID_WORKSPACE_RESULT__ = function (requestId, status, message) {
+    if (!workspaceRequest(requestId) || ["cancelled", "error"].indexOf(status) === -1) return false;
+    var request = workspacePicker;
+    workspacePicker = null;
+    if (status === "cancelled") request.onCancel();
+    else request.onError(typeof message === "string" && message.length <= 2048 ? message : "Unable to open this folder. Choose it again or use an app folder.");
+    return true;
+  };
 
   function sendTheme() {
     if (!themePort || !latestTheme) return;
@@ -144,6 +200,32 @@
         if (window.__DSH_ANDROID_OPEN_SESSION__ === open) delete window.__DSH_ANDROID_OPEN_SESSION__;
       };
     },
+    installWorkspaceChooser: function (select) {
+      if (typeof select !== "function") throw new Error("Workspace chooser requires its Controller action");
+      var owner = { select: select };
+      workspacePicker = null;
+      workspaceChooser = owner;
+      return function () {
+        if (workspaceChooser !== owner) return;
+        workspaceChooser = null;
+        if (workspacePicker && workspacePicker.owner === owner) workspacePicker = null;
+      };
+    },
+    chooseWorkspace: function (callbacks) {
+      if (!workspaceChooser || workspacePicker || !window.crypto || typeof window.crypto.getRandomValues !== "function") return false;
+      if (!callbacks || ["onSuccess", "onBrowse", "onCancel", "onError"].some(function (name) { return typeof callbacks[name] !== "function"; })) return false;
+      var random = new Uint8Array(16);
+      window.crypto.getRandomValues(random);
+      var requestId = Array.prototype.map.call(random, function (value) { return (value + 256).toString(16).slice(1); }).join("");
+      var request = Object.assign({ id: requestId, owner: workspaceChooser, accepted: false }, callbacks);
+      workspacePicker = request;
+      try { window.location.assign("/__dsh_android__/choose-workspace?request=" + requestId); }
+      catch (error) {
+        if (workspacePicker === request) workspacePicker = null;
+        callbacks.onError(error instanceof Error ? error.message : String(error));
+      }
+      return true;
+    },
     wrapModal: function (original, React) {
       return function (dialog, open, close) {
         original(dialog, open, close);
@@ -194,7 +276,7 @@
         var nested = React.useContext(ParentMenu);
         if (!mobile.matches) return React.createElement(original, Object.assign({}, props, { ref: ref }));
         var header = React.createElement("div", { "data-dsh-mobile-menu-header": "", key: "android-back" },
-          React.createElement("button", { type: "button", "aria-label": "Back",
+          React.createElement("button", { type: "button", "data-dsh-android-back": "", "aria-label": backLabel(),
             onClick: function () { window.__DSH_ANDROID_BACK__(); } }, "←"),
           React.createElement("span", null, props["aria-label"] || "DeepSeek Harness"));
         var surface = React.createElement(original, Object.assign({}, props, { ref: ref }), header, props.children);

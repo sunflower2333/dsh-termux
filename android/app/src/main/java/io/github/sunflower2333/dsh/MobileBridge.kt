@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Same-UID abstract Unix socket. Only the native-launched Node receives its bearer. */
 internal class MobileBridge(context: Context,
-    private val hostEvents: ((HostEvent, (Boolean) -> Unit) -> Unit)? = null,
+    private val hostEvents: ((HostEvent, (JSONObject) -> Unit) -> Unit)? = null,
     private val notices: ((NativeNotice, (JSONObject) -> Unit) -> Unit)? = null,
 ) : AutoCloseable {
     data class Credentials(val socketName: String, val token: String)
@@ -94,17 +94,17 @@ internal class MobileBridge(context: Context,
                 return
             }
             if (request.path == HostEventProtocol.PATH) {
-                val event = try { HostEventProtocol.parse(parseFields(request.body)) }
+                val event = try { HostEventProtocol.parse(parseFields(request.body, structured = true)) }
                     catch (_: IllegalArgumentException) { throw HttpFailure(400, "invalid_request", "Invalid native host event") }
                 val sink = hostEvents ?: throw HttpFailure(403, "forbidden", "Native host events unavailable")
                 val completed = CountDownLatch(1)
-                val accepted = AtomicReference<Boolean>()
+                val accepted = AtomicReference<JSONObject>()
                 sink(event) { value -> if (accepted.compareAndSet(null, value)) completed.countDown() }
                 if (!completed.await(5, TimeUnit.SECONDS)) {
                     throw HttpFailure(500, "timeout", "Native host event timed out")
                 }
                 respond(socket, 200, JSONObject().put("ok", true)
-                    .put("value", JSONObject().put("accepted", accepted.get() == true)))
+                    .put("value", accepted.get() ?: JSONObject().put("accepted", false)))
                 return
             }
             val command = MobileProtocol.parse(MobileProtocol.operation(request.path), parseFields(request.body))
@@ -179,27 +179,44 @@ internal class MobileBridge(context: Context,
         return Request(first[1], body)
     }
 
-    private fun parseFields(bytes: ByteArray): Map<String, Any?> {
+    private fun parseFields(bytes: ByteArray, structured: Boolean = false): Map<String, Any?> {
         try {
             val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
             val text = decoder.decode(ByteBuffer.wrap(bytes)).toString()
             JsonReader(StringReader(text)).use { reader ->
                 reader.isLenient = false
                 if (reader.peek() != JsonToken.BEGIN_OBJECT) throw IllegalArgumentException()
+                fun value(depth: Int): Any? {
+                    require(depth <= 2)
+                    return when (reader.peek()) {
+                        JsonToken.STRING -> reader.nextString()
+                        JsonToken.BOOLEAN -> reader.nextBoolean()
+                        JsonToken.NUMBER -> { val number = reader.nextString(); number.toLongOrNull() ?: number.toDoubleOrNull() ?: throw IllegalArgumentException() }
+                        JsonToken.NULL -> { require(structured); reader.nextNull(); null }
+                        JsonToken.BEGIN_ARRAY -> {
+                            require(structured && depth == 0)
+                            reader.beginArray(); val items = ArrayList<Any?>()
+                            while (reader.hasNext()) { require(items.size < 64); items.add(value(depth + 1)) }
+                            reader.endArray(); items
+                        }
+                        JsonToken.BEGIN_OBJECT -> {
+                            require(structured && depth == 1)
+                            reader.beginObject(); val fields = LinkedHashMap<String, Any?>()
+                            while (reader.hasNext()) {
+                                val key = reader.nextName(); require(key.length <= 64 && key !in fields && fields.size < 16)
+                                fields[key] = value(depth + 1)
+                            }
+                            reader.endObject(); fields
+                        }
+                        else -> throw IllegalArgumentException()
+                    }
+                }
                 reader.beginObject()
                 val result = LinkedHashMap<String, Any?>()
                 while (reader.hasNext()) {
                     val name = reader.nextName()
                     if (name.length > 64 || result.containsKey(name) || result.size >= 16) throw IllegalArgumentException()
-                    result[name] = when (reader.peek()) {
-                        JsonToken.STRING -> reader.nextString()
-                        JsonToken.BOOLEAN -> reader.nextBoolean()
-                        JsonToken.NUMBER -> {
-                            val number = reader.nextString()
-                            number.toLongOrNull() ?: number.toDoubleOrNull() ?: throw IllegalArgumentException()
-                        }
-                        else -> throw IllegalArgumentException()
-                    }
+                    result[name] = value(0)
                 }
                 reader.endObject()
                 if (reader.peek() != JsonToken.END_DOCUMENT) throw IllegalArgumentException()

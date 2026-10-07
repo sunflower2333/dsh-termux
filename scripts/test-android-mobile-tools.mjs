@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // HOST integration tests against the real installed DSH services, with a fixture native socket.
+// Attachment bytes use the real Linux store; Android durable-root/libc publication requires ARM64 QA.
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import http from "node:http";
@@ -15,8 +16,10 @@ if (!packageRoot) throw new Error("usage: node scripts/test-android-mobile-tools
 const work = await mkdtemp(join(tmpdir(), "dsh-mobile-tools-test-"));
 await symlink(resolve(packageRoot, "node_modules"), join(work, "node_modules"));
 await copyFile(new URL("./android-mobile-tools.mjs", import.meta.url), join(work, "helper.mjs"));
-const moduleAt = name => import(pathToFileURL(resolve(packageRoot, "node_modules/@deepseek-ai", name, "lib/index.js")));
-const [{ Context }, { SystemPrompt }, { ToolRuntime }, { LocalAttachmentStore }, { createScope }, { LlmRuntime, LlmAdapter, createUserMessage }, plugin] = await Promise.all([
+// Keep the helper and all SDK services in one module namespace, including when
+// the builder preserves the composed SDK's symlinks to retain native overrides.
+const moduleAt = name => import(pathToFileURL(join(work, "node_modules/@deepseek-ai", name, "lib/index.js")));
+const [{ Context }, { SystemPrompt }, { ToolRuntime }, { LocalAttachmentStore }, { createScope }, { LlmRuntime, LlmAdapter, createUserMessage, HarnessError }, plugin] = await Promise.all([
   moduleAt("cordis"), moduleAt("dsh-system-prompt"), moduleAt("dsh-tools"), moduleAt("dsh-attachment-local"), moduleAt("dsh-scope"), moduleAt("dsh-llm"), import(pathToFileURL(join(work, "helper.mjs"))),
 ]);
 const { LIMITS, createMobileTransport } = plugin;
@@ -30,7 +33,7 @@ after(async () => {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const TOKEN = randomBytes(32).toString("hex"); // Fixture credentials only, never printed.
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", "base64");
-const names = ["mobile_status", "mobile_observe", "mobile_click", "mobile_type", "mobile_swipe", "mobile_back", "mobile_stop", "mobile_list_apps", "mobile_open_app"];
+const names = ["mobile_status", "mobile_observe", "mobile_click", "mobile_type", "mobile_scroll", "mobile_swipe", "mobile_back", "mobile_stop", "mobile_list_apps", "mobile_open_app"];
 const SESSION = randomUUID();
 const APPS = [{ packageName: "com.android.settings", label: "Settings" }, { packageName: "io.github.fixture.notes", label: "Notes" }];
 function appList(sessionId = SESSION) { return { sessionId, apps: APPS, truncated: false, foregroundOnly: true }; }
@@ -38,9 +41,10 @@ function status(active = true) { return { enabled: true, connected: true, active
 function observation(args) {
   return { sessionId: args.sessionId, observationId: randomUUID(), sampledAtMs: Date.now(), display: { widthPx: 360, heightPx: 640, rotation: 0 },
     window: { id: 1, packageName: "fixture.screen" }, nodes: [
-      { id: "n0", className: "Button", viewId: "fixture:id/button", packageName: "fixture.screen", bounds: { left: 0, top: 0, right: 100, bottom: 44 }, text: "Open", clickable: true, editable: false, password: false },
-      { id: "n1", className: "EditText", viewId: "fixture:id/input", packageName: "fixture.screen", bounds: { left: 0, top: 44, right: 100, bottom: 88 }, text: "old", clickable: true, editable: true, password: false },
-      { id: "n2", className: "EditText", viewId: "fixture:id/password", packageName: "fixture.screen", bounds: { left: 0, top: 88, right: 100, bottom: 132 }, text: "fixture-secret", description: "fixture-secret", clickable: true, editable: true, password: true },
+      { id: "n0", className: "Button", viewId: "fixture:id/button", packageName: "fixture.screen", bounds: { left: 0, top: 0, right: 100, bottom: 44 }, text: "Open", clickable: true, editable: false, password: false, enabled: true, visible: true, scrollable: false, parentId: "n3", actions: ["click"] },
+      { id: "n1", className: "EditText", viewId: "fixture:id/input", packageName: "fixture.screen", bounds: { left: 0, top: 44, right: 100, bottom: 88 }, text: "old", clickable: true, editable: true, password: false, enabled: true, visible: true, scrollable: false, parentId: "n3", actions: ["click", "set_text", "focus"] },
+      { id: "n2", className: "EditText", viewId: "fixture:id/password", packageName: "fixture.screen", bounds: { left: 0, top: 88, right: 100, bottom: 132 }, text: "fixture-secret", description: "fixture-secret", clickable: true, editable: true, password: true, enabled: true, visible: true, scrollable: false, parentId: "n3", actions: ["click", "set_text"] },
+      { id: "n3", className: "ScrollView", viewId: "fixture:id/list", packageName: "fixture.screen", bounds: { left: 0, top: 0, right: 360, bottom: 640 }, clickable: false, editable: false, password: false, enabled: true, visible: true, scrollable: true, parentId: null, actions: ["scroll_forward", "scroll_backward"] },
     ], truncated: false, screenshotRequested: args.screenshot, screenshot: args.screenshot ? { mimeType: "image/png", base64: png.toString("base64"), widthPx: 1, heightPx: 1, capturedAtMs: Date.now() } : null };
 }
 function androidClippedObservation(args, omitClippedNodes) {
@@ -94,7 +98,7 @@ async function bridge(handler) {
 async function runtime(handler, { modalities = ["text"], android = true, modelInfoError = false } = {}) {
   const native = await bridge(handler ?? (call => {
     const action = call.path.split("/").at(-1);
-    return { ok: true, value: action === "observe" ? observation(call.args) : action === "status" || action === "stop" ? status(action !== "stop") : action === "list_apps" ? appList(call.args.sessionId) : { performed: true, action, observationId: call.args.observationId, ...(action === "open_app" ? { packageName: call.args.packageName, foregroundOnly: true } : {}) } };
+    return { ok: true, value: action === "observe" ? observation(call.args) : action === "status" || action === "stop" ? status(action !== "stop") : action === "list_apps" ? appList(call.args.sessionId) : { performed: true, action, observationId: call.args.observationId, ...(action === "open_app" ? { sessionId: call.args.sessionId, packageName: call.args.packageName, foregroundOnly: true } : {}) } };
   }));
   Object.assign(process.env, native.env, { DSH_ANDROID: android ? "1" : "0" });
   const ctx = new Context();
@@ -115,19 +119,37 @@ async function runtime(handler, { modalities = ["text"], android = true, modelIn
   ctx.llm.registerAdapter(["fixture-provider", "fallback"], adapter);
   const fiber = ctx.plugin(plugin);
   await fiber;
+  // The APK-only plugin has captured the authenticated fixture UDS transport.
+  // This HOST is Linux: use the actual SDK's Linux attachment publication, not
+  // its Android app-owned boundary/ARM64 Koffi path. No SDK bytes or refs are replaced.
+  process.env.DSH_ANDROID = "0";
   const presetKey = { id: "standard-fixture" };
   const preset = createScope(ctx, presetKey);
   const agent = { id: randomUUID(), options: { provider: "fallback", model: "fallback-model" }, session: { requestHeader: () => ({ config: { provider: "fixture-provider", model: "fixture-model" } }) } };
   const scoped = createScope(preset.ctx, agent, { parent: presetKey });
   resources.push(async () => { await scoped.dispose(); await preset.dispose(); await ctx.fiber.dispose(); });
   const execute = (name, args = {}, signal = new AbortController().signal, owner = agent) => ctx.tools.execute({ name, arguments: args, callId: randomUUID(), signal, agent: owner });
-  const observe = async () => {
-    const result = await execute("mobile_observe", { sessionId: SESSION });
+  const observe = async (options = {}) => {
+    const result = await execute("mobile_observe", { sessionId: SESSION, ...options });
     assert.equal(result.isError, false, JSON.stringify(result.error)); return result.value;
   };
   return { ctx, agent, execute, observe, native, resolutions, fiber, adapter };
 }
 function code(result) { return result.error?.info?.code; }
+
+test("the helper and actual SDK share HarnessError identity and preserve structured safe error codes", async () => {
+  await assert.rejects(createMobileTransport({})("status", {}), error => {
+    assert.ok(error instanceof HarnessError);
+    assert.equal(error.code, "MOBILE_UNAVAILABLE");
+    return true;
+  });
+  const r = await runtime();
+  const result = await r.execute("mobile_click", { sessionId: SESSION, observationId: "missing", nodeId: "n0" });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.error.info, { name: "HarnessError", code: "MOBILE_STALE_OBSERVATION" });
+  assert.equal(r.native.calls.length, 0);
+  assert.ok(!JSON.stringify(result).includes(TOKEN));
+});
 
 test("APK patch uses the real web-app plugin entry, is idempotent, and preserves canonical input", async () => {
   const originalPath = resolve(packageRoot, "node_modules/@deepseek-ai/dsh-web-app/lib/index.js");
@@ -145,11 +167,26 @@ test("APK patch uses the real web-app plugin entry, is idempotent, and preserves
   assert.deepEqual(await readFile(join(lib, "android-mobile-tools.js")), helper);
   assert.equal(await readFile(originalPath, "utf8"), before);
   assert.equal(first.match(/ctx\.plugin\(AndroidMobileTools\)/g).length, 1);
+  const mobileLine = '  if (process.env.DSH_ANDROID === "1") ctx.plugin(AndroidMobileTools);\n';
+  const hostLine = '  if (process.env.DSH_ANDROID === "1") ctx.plugin(AndroidHostEvents);\n';
+  for (const lines of [hostLine + mobileLine, mobileLine + hostLine]) {
+    const composed = first.replace(hostLine, "").replace(mobileLine, lines);
+    await writeFile(join(lib, "index.js"), composed);
+    await patchAndroidMobileTools(fixture);
+    assert.equal(await readFile(join(lib, "index.js"), "utf8"), composed);
+  }
+  await writeFile(join(lib, "index.js"), first.replace(mobileLine, mobileLine + mobileLine));
+  await assert.rejects(patchAndroidMobileTools(fixture), /Unsupported/);
+  await writeFile(join(lib, "index.js"), first);
+  if (first.includes('import * as AndroidHostEvents from "./android-host-events.js";'))
+    await copyFile(new URL("./android-host-events.mjs", import.meta.url), join(lib, "android-host-events.js"));
   const entry = await import(pathToFileURL(join(lib, "index.js")));
   let captured;
   const sentinel = new Error("fixture-capture");
   process.env.DSH_ANDROID = "1";
-  assert.throws(() => entry.apply({ plugin(module) { captured = module; throw sentinel; } }, {}), error => error === sentinel);
+  assert.throws(() => entry.apply({ plugin(module) {
+    if (module.name === "android-mobile-tools") { captured = module; throw sentinel; }
+  } }, {}), error => error === sentinel);
   assert.equal(captured.name, "android-mobile-tools");
   captured = undefined;
   process.env.DSH_ANDROID = "0";
@@ -158,7 +195,7 @@ test("APK patch uses the real web-app plugin entry, is idempotent, and preserves
   await writeFile(join(lib, "index.js"), before.replace("function apply(ctx, config) {", "function apply_changed(ctx, config) {"));
   await assert.rejects(patchAndroidMobileTools(fixture), /Unsupported/);
 });
-test("real DSH prompt/tool registry exposes all nine tools through standing preset and agent scopes without secrets", async () => {
+test("real DSH prompt/tool registry exposes all ten tools through standing preset and agent scopes without secrets", async () => {
   const r = await runtime();
   const assembly = await r.ctx.systemPrompt.assemble({ scope: r.agent });
   assert.deepEqual(assembly.tools.map(tool => tool.name).filter(name => names.includes(name)).sort(), [...names].sort());
@@ -194,9 +231,9 @@ test("the actual DSH AgentLoop discovers, dispatches and logs mobile tools throu
     const previous = request.messages.filter(message => message.role === "tool").at(-1);
     const value = previous === undefined ? undefined : JSON.parse(previous.content.find(block => block.type === "text").text.split("\n")[0]);
     const calls = [
-      ["mobile_status", {}], ["mobile_observe", { sessionId: value?.sessionId }],
+      ["mobile_status", {}], ["mobile_observe", { sessionId: value?.sessionId, screenshot: true }],
       ["mobile_click", { sessionId: value?.sessionId, observationId: value?.observationId, nodeId: "n0" }],
-      ["mobile_observe", { sessionId: SESSION }], ["mobile_stop", {}],
+      ["mobile_observe", { sessionId: SESSION, screenshot: true }], ["mobile_stop", {}],
     ];
     if (step <= calls.length) {
       if (step === 3 || step === 5) assert.ok(previous.content.some(block => block.type === "image" && block.attachment.attachmentId));
@@ -229,6 +266,81 @@ test("the actual DSH AgentLoop discovers, dispatches and logs mobile tools throu
   assert.deepEqual(r.native.calls.map(call => call.path.split("/").at(-1)), ["status", "observe", "click", "observe", "stop"]);
   assert.ok(!JSON.stringify(log).includes(TOKEN) && !JSON.stringify(log).includes(png.toString("base64")));
 });
+test("a text-only provider drives the actual AgentLoop through launcher, node typing/click/scroll/back without any image", async () => {
+  let opened = false, text = "old", screenState = "Open";
+  const r = await runtime(call => {
+    const action = call.path.split("/").at(-1);
+    if (action === "status" || action === "stop") return { ok: true, value: status(action !== "stop") };
+    if (action === "list_apps") return { ok: true, value: appList(call.args.sessionId) };
+    if (action === "observe") {
+      const value = observation(call.args);
+      if (opened) { value.window = { id: 2, packageName: "io.github.fixture.notes" }; value.nodes.forEach(node => { node.packageName = "io.github.fixture.notes"; }); }
+      value.nodes[0].text = screenState; value.nodes[1].text = text;
+      assert.equal(call.args.screenshot, false);
+      return { ok: true, value };
+    }
+    if (action === "open_app") opened = true;
+    if (action === "type") text = call.args.text;
+    if (action === "click") screenState = "Opened";
+    if (action === "scroll") screenState = "Scrolled";
+    if (action === "back") screenState = "Returned";
+    return { ok: true, value: { performed: true, action, observationId: call.args.observationId,
+      ...(action === "open_app" ? { sessionId: call.args.sessionId, packageName: call.args.packageName, foregroundOnly: true } : {}) } };
+  }, { modalities: ["text"] });
+  const [{ AgentRegistry }, { SessionStore }, { SessionProjectionRegistry }, { AgentLoop }] = await Promise.all([
+    moduleAt("dsh-agent"), moduleAt("dsh-session"), moduleAt("dsh-session-projection"), moduleAt("dsh-agent-loop")
+  ]);
+  await r.ctx.plugin(AgentRegistry); await r.ctx.plugin(SessionStore); await r.ctx.plugin(SessionProjectionRegistry); await r.ctx.plugin(AgentLoop, {});
+  const requests = [], errors = []; r.ctx.on("agent/error", event => errors.push(event.error ?? event));
+  r.adapter.stream = async function* (request) {
+    requests.push(request); const step = requests.length;
+    assert.ok(!request.messages.some(message => message.content.some(block => block.type === "image")), "text-only model receives no image");
+    const previous = request.messages.filter(message => message.role === "tool").at(-1);
+    const value = previous ? JSON.parse(previous.content.find(block => block.type === "text").text) : undefined;
+    const binding = { sessionId: SESSION, observationId: value?.observationId };
+    if ([5, 7, 9, 11, 13].includes(step)) {
+      assert.ok(previous.content.some(block => block.type === "text" && block.text.includes("Android accessibility layout")));
+      assert.equal(value.window.packageName, "io.github.fixture.notes");
+      assert.equal(value.nodes[2].text, undefined); assert.equal(value.nodes[2].description, undefined);
+    }
+    if (step === 7) assert.equal(value.nodes[1].text, "Fixture mobile task");
+    if (step === 9) assert.equal(value.nodes[0].text, "Opened");
+    if (step === 11) assert.equal(value.nodes[0].text, "Scrolled");
+    if (step === 13) assert.equal(value.nodes[0].text, "Returned");
+    const calls = [
+      ["mobile_status", {}], ["mobile_list_apps", { sessionId: value?.sessionId }],
+      ["mobile_open_app", { sessionId: SESSION, packageName: "io.github.fixture.notes" }],
+      ["mobile_observe", { sessionId: SESSION }], ["mobile_type", { ...binding, nodeId: "n1", text: "Fixture mobile task" }],
+      ["mobile_observe", { sessionId: SESSION }], ["mobile_click", { ...binding, nodeId: "n0" }],
+      ["mobile_observe", { sessionId: SESSION }], ["mobile_scroll", { ...binding, nodeId: "n3", direction: "forward" }],
+      ["mobile_observe", { sessionId: SESSION }], ["mobile_back", binding],
+      ["mobile_observe", { sessionId: SESSION }], ["mobile_stop", {}]
+    ];
+    if (step <= calls.length) {
+      const [name, args] = calls[step - 1], id = randomUUID();
+      const block = { type: "tool-call", id, name, arguments: JSON.stringify(args) };
+      yield { type: "block-start", index: 0, blockType: "tool-call" };
+      yield { type: "tool-call-delta", index: 0, id, name, argumentsDelta: block.arguments };
+      yield { type: "block-end", index: 0, block }; yield { type: "finish", reason: { kind: "tool-calls" } };
+    } else {
+      assert.equal(step, 14); const block = { type: "text", text: "Fixture text-only mobile task verified and stopped." };
+      yield { type: "block-start", index: 0, blockType: "text" }; yield { type: "text-delta", index: 0, text: block.text };
+      yield { type: "block-end", index: 0, block }; yield { type: "finish", reason: { kind: "stop" } };
+    }
+  };
+  const agent = await r.ctx.agentLoop.create("text-mobile-loop-" + randomUUID(), { provider: "fixture-provider", model: "text-model" });
+  agent.followup(createUserMessage({ content: [{ type: "text", text: "Fixture only: open Notes, type, click, scroll, Back, verify each result, then stop." }] }));
+  let timer;
+  try { await Promise.race([agent.whenIdle(), new Promise((_, reject) => { timer = setTimeout(() => { agent.cancel({ kind: "user" }); reject(new Error("Text-only fixture AgentLoop exceeded 5 seconds.")); }, 5000); })]); }
+  finally { clearTimeout(timer); }
+  assert.deepEqual(errors, []); assert.equal(requests.length, 14);
+  const expected = ["status", "list_apps", "open_app", "observe", "type", "observe", "click", "observe", "scroll", "observe", "back", "observe", "stop"];
+  assert.deepEqual(r.native.calls.map(call => call.path.split("/").at(-1)), expected);
+  assert.deepEqual(r.native.calls.find(call => call.path.endsWith("/open_app")).args, { sessionId: SESSION, packageName: "io.github.fixture.notes" });
+  const log = agent.session.snapshotEvents(); assert.equal(log.filter(event => event.type === "tool/call").length, 13);
+  assert.equal(log.filter(event => event.type === "tool/result").length, 13);
+  assert.ok(!JSON.stringify(log).includes(TOKEN) && !JSON.stringify(log).includes("fixture-secret") && !JSON.stringify(log).includes(png.toString("base64")));
+});
 test("desktop/Termux never registers mobile tools", async () => {
   const r = await runtime(undefined, { android: false });
   assert.deepEqual((await r.ctx.systemPrompt.assemble({ scope: r.agent })).tools.filter(tool => names.includes(tool.name)), []);
@@ -240,13 +352,13 @@ test("status/stop use authenticated real UDS POSTs and reflect native grant, inc
   assert.equal(current.isError, false); assert.deepEqual(current.value, status());
   const stopped = await r.execute("mobile_stop");
   assert.equal(stopped.isError, false); assert.equal(stopped.value.active, false); assert.equal(stopped.value.sessionId, null);
-  assert.match(stopped.content[0].text, /Mobile control/);
+  assert.ok(stopped.content.some(block => block.type === "text" && /Mobile use/.test(block.text)));
   for (const call of r.native.calls) { assert.equal(call.method, "POST"); assert.deepEqual(call.args, {}); assert.equal(call.auth, `Bearer ${TOKEN}`); }
 });
 test("nonvision, unknown and unresolved model routes request no screenshot and return only real nodes", async () => {
   for (const options of [{ modalities: ["text"] }, { modalities: null }, { modelInfoError: true }]) {
     const r = await runtime(undefined, options);
-    const value = await r.observe();
+    const value = await r.observe({ screenshot: true });
     assert.deepEqual(r.resolutions, [{ provider: "fixture-provider", model: "fixture-model" }]);
     assert.equal(r.native.calls[0].args.screenshot, false); assert.equal(value.screenshotRequested, false);
     assert.equal(value.screenshotOmittedReason, "text_only_model"); assert.equal(value.image, undefined);
@@ -255,7 +367,7 @@ test("nonvision, unknown and unresolved model routes request no screenshot and r
 });
 test("vision observation stores a real durable DSH image attachment and renders its actual reference, without base64", async () => {
   const r = await runtime(undefined, { modalities: ["text", "image"] });
-  const result = await r.execute("mobile_observe", { sessionId: SESSION });
+  const result = await r.execute("mobile_observe", { sessionId: SESSION, screenshot: true });
   assert.equal(result.isError, false, JSON.stringify(result.error));
   const image = result.value.image;
   assert.ok(image.attachmentId); assert.equal(image.width, 1); assert.equal(image.height, 1);
@@ -266,9 +378,86 @@ test("vision observation stores a real durable DSH image attachment and renders 
   assert.deepEqual(result.content.find(block => block.type === "image").attachment, image);
   assert.ok(!JSON.stringify(result).includes(png.toString("base64")) && !JSON.stringify(result).includes(TOKEN));
 });
+test("default observations are text-first even for a vision route, with pure JSON and a separate real accessibility guide", async () => {
+  const r = await runtime(undefined, { modalities: ["text", "image"] });
+  const result = await r.execute("mobile_observe", { sessionId: SESSION });
+  assert.equal(result.isError, false); assert.equal(r.native.calls[0].args.screenshot, false);
+  assert.equal(result.value.screenshotOmittedReason, "not_requested"); assert.equal(result.value.image, undefined);
+  assert.deepEqual(r.resolutions, [], "default text observation does not depend on remote capability metadata");
+  const parsed = JSON.parse(result.content[0].text); assert.deepEqual(parsed, result.value);
+  assert.equal(result.content.filter(block => block.type === "text").length, 2);
+  const guide = result.content[1].text; assert.ok(guide.length <= LIMITS.summaryChars);
+  assert.match(guide, /n0 parent=n3 \[click\] "Open" bounds=\(0,0,100,44\) actions=click/);
+  assert.match(guide, /n3 \[scroll\]/); assert.match(guide, /scroll_forward,scroll_backward/);
+  assert.ok(!JSON.stringify(result).includes("fixture-secret")); assert.ok(!result.content.some(block => block.type === "image"));
+});
+test("node bindings survive slow inference while coordinates/swipes expire at thirty seconds and node actions never cross agents", async t => {
+  const r = await runtime();
+  const value = await r.observe(), binding = { sessionId: SESSION, observationId: value.observationId };
+  const received = Date.now();
+  t.mock.method(Date, "now", () => received + LIMITS.screenObservationAgeMs + 1);
+  try {
+    const calls = r.native.calls.length;
+    assert.equal(code(await r.execute("mobile_click", { ...binding, x: 1, y: 1 })), "MOBILE_STALE_OBSERVATION");
+    assert.equal(code(await r.execute("mobile_swipe", { ...binding, fromX: 0, fromY: 0, toX: 10, toY: 10 })), "MOBILE_STALE_OBSERVATION");
+    assert.equal(code(await r.execute("mobile_back", binding)), "MOBILE_STALE_OBSERVATION");
+    const other = { ...r.agent, id: randomUUID() };
+    assert.equal(code(await r.execute("mobile_click", { ...binding, nodeId: "n0" }, undefined, other)), "MOBILE_STALE_OBSERVATION");
+    assert.equal(r.native.calls.length, calls);
+    assert.equal((await r.execute("mobile_click", { ...binding, nodeId: "n0" })).isError, false, "unchanged node action succeeds after the old thirty-second deadline");
+  } finally { t.mock.restoreAll(); }
+  const next = await r.observe(); const time = Date.now(); const before = r.native.calls.length;
+  t.mock.method(Date, "now", () => time + LIMITS.observationAgeMs + 1);
+  try {
+    assert.equal(code(await r.execute("mobile_type", { sessionId: SESSION, observationId: next.observationId, nodeId: "n1", text: "expired" })), "MOBILE_STALE_OBSERVATION");
+    assert.equal(r.native.calls.length, before);
+  } finally { t.mock.restoreAll(); }
+});
+test("reported enabled/visible/scroll actions are enforced without silently clicking coordinates or retrying stale native actions", async () => {
+  for (const [changes, tool, args, expected] of [
+    [{ clickable: false, actions: [] }, "mobile_click", { nodeId: "n0" }, "MOBILE_NOT_CLICKABLE"],
+    [{ enabled: false }, "mobile_click", { nodeId: "n0" }, "MOBILE_NOT_ENABLED"],
+    [{ visible: false }, "mobile_click", { nodeId: "n0" }, "MOBILE_NOT_VISIBLE"],
+    [{ scrollable: false }, "mobile_scroll", { nodeId: "n3", direction: "forward" }, "MOBILE_NOT_SCROLLABLE"],
+    [{ actions: ["scroll_backward"] }, "mobile_scroll", { nodeId: "n3", direction: "forward" }, "MOBILE_NOT_SCROLLABLE"]
+  ]) {
+    const r = await runtime(call => { const value = observation(call.args); Object.assign(value.nodes.find(node => node.id === args.nodeId), changes); return { ok: true, value }; });
+    const observed = await r.observe(); const count = r.native.calls.length;
+    assert.equal(code(await r.execute(tool, { sessionId: SESSION, observationId: observed.observationId, ...args })), expected);
+    assert.equal(r.native.calls.length, count, "an ineligible cached target never receives an implicit coordinate fallback");
+  }
+  const r = await runtime(call => call.path.endsWith("/observe") ? { ok: true, value: observation(call.args) } :
+    { ok: false, error: { code: "stale_observation", message: "private-details" } });
+  const observed = await r.observe(); const result = await r.execute("mobile_click", { sessionId: SESSION, observationId: observed.observationId, nodeId: "n0" });
+  assert.equal(code(result), "MOBILE_STALE_OBSERVATION"); assert.match(result.content[0].text, /do not repeat an endless observe\/action loop/);
+  assert.deepEqual(r.native.calls.map(call => call.path.split("/").at(-1)), ["observe", "click"], "one failed dispatch never triggers hidden observe or action retries");
+});
+test("accessibility guides stay bounded while full JSON retains every real node and password data stays redacted", async () => {
+  const r = await runtime(call => {
+    const value = observation(call.args); value.nodes = Array.from({ length: LIMITS.nodes }, (_, index) => ({
+      ...value.nodes[0], id: `n${index}`, parentId: null, text: index === 999 ? "fixture-secret" : "Long accessible label " + "x".repeat(1000),
+      password: index === 999, description: index === 999 ? "fixture-secret" : "fixture description"
+    })); return { ok: true, value };
+  });
+  const result = await r.execute("mobile_observe", { sessionId: SESSION }); assert.equal(result.isError, false);
+  assert.equal(JSON.parse(result.content[0].text).nodes.length, LIMITS.nodes);
+  assert.ok(result.content[1].text.length <= LIMITS.summaryChars); assert.match(result.content[1].text, /Guide shortened/);
+  assert.ok(!JSON.stringify(result).includes("fixture-secret"));
+});
+test("text layout validates enabled/visible/scrollable flags, closed action names, unique actions and real retained parent IDs", async () => {
+  for (const change of [
+    { enabled: "true" }, { visible: 1 }, { scrollable: null }, { parentId: "not-retained" }, { parentId: "n0" },
+    { actions: ["shell"] }, { actions: ["click", "click"] }, { actions: Array(17).fill("focus") }
+  ]) {
+    const r = await runtime(call => { const value = observation(call.args); Object.assign(value.nodes[0], change); return { ok: true, value }; });
+    const result = await r.execute("mobile_observe", { sessionId: SESSION });
+    assert.equal(code(result), "MOBILE_INVALID_RESPONSE");
+    assert.ok(!JSON.stringify(result).includes("fixture-secret"));
+  }
+});
 test("all action variants bind fresh observation, enforce coordinates/text/password limits, and require verification", async () => {
   const r = await runtime();
-  for (const [action, extra] of [["click", { nodeId: "n0" }], ["click", { x: 359.5, y: 639.5 }], ["type", { nodeId: "n1", text: "replacement 🌻" }], ["swipe", { fromX: 0, fromY: 10, toX: 359, toY: 639, durationMs: 300 }], ["back", {}]]) {
+  for (const [action, extra] of [["click", { nodeId: "n0" }], ["click", { x: 359.5, y: 639.5 }], ["type", { nodeId: "n1", text: "replacement 🌻" }], ["scroll", { nodeId: "n3", direction: "forward" }], ["scroll", { nodeId: "n3", direction: "backward" }], ["swipe", { fromX: 0, fromY: 10, toX: 359, toY: 639, durationMs: 300 }], ["back", {}]]) {
     const value = await r.observe();
     const args = { sessionId: SESSION, observationId: value.observationId, ...extra };
     const result = await r.execute("mobile_" + action, args);
@@ -297,17 +486,17 @@ test("native errors propagate stable safe codes; failed dispatched actions inval
   const value = await r.observe();
   const args = { sessionId: SESSION, observationId: value.observationId };
   const failed = await r.execute("mobile_back", args);
-  assert.equal(code(failed), "MOBILE_PAUSED"); assert.match(failed.content[0].text, /Mobile control/); assert.ok(!JSON.stringify(failed).includes(TOKEN));
+  assert.equal(code(failed), "MOBILE_PAUSED"); assert.match(failed.content[0].text, /Mobile use/); assert.ok(!JSON.stringify(failed).includes(TOKEN));
   assert.equal(code(await r.execute("mobile_back", args)), "MOBILE_STALE_OBSERVATION");
   const errors = await bridge(call => ({ ok: false, error: { code: call.args.fixtureCode, message: TOKEN } }));
-  for (const nativeCode of ["timeout", "no_window", "not_enabled", "not_editable", "not_visible", "unknown_node", "invalid_display", "secure_window", "screenshot_failed", "screen_too_large", "response_too_large", "action_cancelled", "forbidden"]) {
+  for (const nativeCode of ["timeout", "no_window", "not_enabled", "not_editable", "not_clickable", "not_scrollable", "not_visible", "unknown_node", "invalid_display", "secure_window", "screenshot_failed", "screen_too_large", "response_too_large", "action_cancelled", "forbidden"]) {
     await assert.rejects(createMobileTransport(errors.env)("status", { fixtureCode: nativeCode }), error => error.code === "MOBILE_" + nativeCode.toUpperCase() && !error.message.includes(TOKEN));
   }
 });
 test("malformed native observations and screenshots fail before attachment/model output", async () => {
   for (const mutate of [v => { v.nodes = Array(1001).fill(v.nodes[0]); }, v => { v.nodes[0].text = "x".repeat(2049); }, v => { v.sessionId = randomUUID(); }, v => { v.screenshot.base64 = "bad!"; }, v => { v.screenshot.widthPx = 2; }]) {
     const r = await runtime(call => { const value = observation(call.args); mutate(value); return { ok: true, value }; }, { modalities: ["image"] });
-    const result = await r.execute("mobile_observe", { sessionId: SESSION });
+    const result = await r.execute("mobile_observe", { sessionId: SESSION, screenshot: true });
     assert.equal(code(result), "MOBILE_INVALID_RESPONSE"); assert.ok(!JSON.stringify(result).includes(TOKEN));
   }
 });
@@ -334,7 +523,7 @@ test("native omission of clipped nodes preserves retained IDs, descriptions, act
       }
       return { ok: true, value: { performed: true, action, observationId: call.args.observationId } };
     }, { modalities });
-    const result = await r.execute("mobile_observe", { sessionId: SESSION });
+    const result = await r.execute("mobile_observe", { sessionId: SESSION, screenshot: modalities.includes("image") });
     assert.equal(result.isError, false, JSON.stringify(result.error));
     assert.equal(result.value.nodes.length, 31);
     assert.deepEqual(result.value.nodes, issued.nodes);
@@ -349,7 +538,7 @@ test("native omission of clipped nodes preserves retained IDs, descriptions, act
       assert.deepEqual(result.content.find(block => block.type === "image").attachment, image);
       assert.deepEqual(await readFile(r.ctx.attachments.imageHostPath(image)), png);
     } else {
-      assert.equal(result.value.screenshotOmittedReason, "text_only_model");
+      assert.equal(result.value.screenshotOmittedReason, "not_requested");
       assert.equal(result.value.image, undefined);
       assert.ok(!result.content.some(block => block.type === "image"));
     }
@@ -406,7 +595,7 @@ test("listing and opening cannot bypass paused or missing native task grants", a
     const value = await r.observe();
     const args = { sessionId: SESSION, observationId: value.observationId, packageName: "com.android.settings" };
     assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_" + nativeCode.toUpperCase());
-    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_STALE_OBSERVATION");
+    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_" + nativeCode.toUpperCase());
   }
   const r = await runtime();
   assert.equal(code(await r.execute("mobile_list_apps", { sessionId: "" })), "MOBILE_INVALID_REQUEST");
@@ -427,21 +616,20 @@ test("open app rejects URI/component/extra fields and invalid package names befo
     assert.equal(r.native.calls.length, calls);
   }
 });
-test("open app is bound to the observing agent, current session, ID and observation age", async t => {
-  const r = await runtime();
-  const value = await r.observe();
-  const args = { sessionId: SESSION, observationId: value.observationId, packageName: "com.android.settings" };
-  const count = r.native.calls.length;
+test("launcher opening is independent of screen observations while the native current-session grant remains authoritative", async t => {
+  const r = await runtime(call => call.args.sessionId !== SESSION ? { ok: false, error: { code: "invalid_session", message: TOKEN } } :
+    { ok: true, value: { performed: true, action: "open_app", sessionId: call.args.sessionId,
+      observationId: call.args.observationId, packageName: call.args.packageName, foregroundOnly: true } });
+  const args = { sessionId: SESSION, packageName: "com.android.settings" };
+  assert.equal((await r.execute("mobile_open_app", args)).isError, false, "a text model can open an app without observing DSH first");
   const other = { ...r.agent, id: randomUUID() };
-  for (const [input, owner] of [[args, other], [{ ...args, observationId: randomUUID() }, r.agent], [{ ...args, sessionId: randomUUID() }, r.agent]]) {
-    assert.equal(code(await r.execute("mobile_open_app", input, undefined, owner)), "MOBILE_STALE_OBSERVATION");
-    assert.equal(r.native.calls.length, count);
-  }
+  assert.equal((await r.execute("mobile_open_app", args, undefined, other)).isError, false, "launcher opening is not a screen-target action");
+  assert.equal(code(await r.execute("mobile_open_app", { ...args, sessionId: randomUUID() })), "MOBILE_INVALID_SESSION");
+  assert.equal((await r.execute("mobile_open_app", { ...args, observationId: randomUUID() })).isError, false, "legacy observation field is only compatibility metadata");
   const now = Date.now();
   t.mock.method(Date, "now", () => now + LIMITS.observationAgeMs + 1);
   try {
-    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_STALE_OBSERVATION");
-    assert.equal(r.native.calls.length, count);
+    assert.equal((await r.execute("mobile_open_app", args)).isError, false, "slow inference never expires a screen-independent launcher request");
   } finally { t.mock.restoreAll(); }
 });
 test("accepted launcher open requires a fresh observation before further foreground actions", async () => {
@@ -459,14 +647,14 @@ test("accepted launcher open requires a fresh observation before further foregro
     }
     if (action === "open_app") opened = true;
     return { ok: true, value: { performed: true, action, observationId: call.args.observationId,
-      ...(action === "open_app" ? { packageName: call.args.packageName, foregroundOnly: true } : {}) } };
+      ...(action === "open_app" ? { sessionId: call.args.sessionId, packageName: call.args.packageName, foregroundOnly: true } : {}) } };
   });
   const observed = await r.observe();
   assert.equal((await r.execute("mobile_list_apps", { sessionId: SESSION })).isError, false);
   const args = { sessionId: SESSION, observationId: observed.observationId, packageName: "io.github.fixture.notes" };
   const result = await r.execute("mobile_open_app", args);
   assert.equal(result.isError, false, JSON.stringify(result.error));
-  assert.deepEqual(result.value, { performed: true, action: "open_app", observationId: observed.observationId,
+  assert.deepEqual(result.value, { performed: true, action: "open_app", sessionId: SESSION, observationId: observed.observationId,
     verificationRequired: true, packageName: "io.github.fixture.notes", foregroundOnly: true });
   assert.deepEqual(r.native.calls.at(-1).args, args);
   assert.equal(code(await r.execute("mobile_back", { sessionId: SESSION, observationId: observed.observationId })), "MOBILE_STALE_OBSERVATION");
@@ -478,8 +666,8 @@ test("accepted launcher open requires a fresh observation before further foregro
 test("failed or malformed launcher replies consume the observation and redact native messages", async () => {
   for (const reply of [
     args => ({ ok: false, error: { code: "app_not_available", message: TOKEN + " private package state" } }),
-    args => ({ ok: true, value: { performed: true, action: "open_app", observationId: args.observationId, packageName: "different.app", foregroundOnly: true } }),
-    args => ({ ok: true, value: { performed: true, action: "open_app", observationId: args.observationId, packageName: args.packageName, foregroundOnly: false } }),
+    args => ({ ok: true, value: { performed: true, action: "open_app", sessionId: args.sessionId, observationId: args.observationId, packageName: "different.app", foregroundOnly: true } }),
+    args => ({ ok: true, value: { performed: true, action: "open_app", sessionId: args.sessionId, observationId: args.observationId, packageName: args.packageName, foregroundOnly: false } }),
   ]) {
     const r = await runtime(call => call.path.endsWith("/observe") ? { ok: true, value: observation(call.args) } : reply(call.args));
     const value = await r.observe();
@@ -488,7 +676,7 @@ test("failed or malformed launcher replies consume the observation and redact na
     assert.equal(result.isError, true);
     assert.ok(["MOBILE_APP_NOT_AVAILABLE", "MOBILE_INVALID_RESPONSE"].includes(code(result)));
     assert.ok(!JSON.stringify(result).includes(TOKEN));
-    assert.equal(code(await r.execute("mobile_open_app", args)), "MOBILE_STALE_OBSERVATION");
+    assert.equal(code(await r.execute("mobile_back", { sessionId: SESSION, observationId: value.observationId })), "MOBILE_STALE_OBSERVATION");
   }
 });
 test("launcher requests share the FIFO and queued aborted open never launches", async () => {

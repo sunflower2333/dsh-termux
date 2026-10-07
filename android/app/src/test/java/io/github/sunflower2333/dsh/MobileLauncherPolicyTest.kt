@@ -23,4 +23,22 @@ class MobileLauncherPolicyTest {
         assertEquals("a".repeat(127), truncated)
         assertEquals("app😀", MobileLauncherPolicy.label("app😀", "package.name"))
     }
+
+    @Test fun launchingAnAppRequiresGrantButDoesNotDependOnAChangingScreen() {
+        val fields = mapOf("sessionId" to "grant-1", "packageName" to "com.android.settings")
+        assertEquals(MobileCommand.OpenApp("grant-1", null, "com.android.settings"),
+            MobileProtocol.parse(MobileOperation.OPEN_APP, fields))
+        for (invalid in listOf(null, "", "obs/foreign", true)) {
+            try { MobileProtocol.parse(MobileOperation.OPEN_APP, fields + ("observationId" to invalid)); fail("Invalid legacy ID accepted") }
+            catch (_: MobileProtocolException) { }
+        }
+        for (key in listOf("sessionId", "packageName")) {
+            try { MobileProtocol.parse(MobileOperation.OPEN_APP, fields - key); fail("A required launch field was omitted") }
+            catch (_: MobileProtocolException) { }
+        }
+        for (key in listOf("x", "intent", "uri", "component", "flags")) {
+            try { MobileProtocol.parse(MobileOperation.OPEN_APP, fields + (key to "untrusted")); fail("An arbitrary launch parameter was accepted") }
+            catch (_: MobileProtocolException) { }
+        }
+    }
 }

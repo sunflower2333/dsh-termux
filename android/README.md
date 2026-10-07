@@ -47,20 +47,42 @@ shutdown release it.
 
 DSH's existing question and approval events also produce Android notifications.
 Tap a request to open its original conversation through DSH's own navigation;
-answer or approve inside DSH. Tapping does not grant a tool permission. Generic
-notification text keeps prompts, command arguments and credentials out of the
-notification payload. Completed turns can notify while the chat is in the
-background.
+eligible single text questions also offer Android's inline reply input. Sending
+that input answers the exact live question through DSH's question service.
+Requests with multiple questions and action approvals still open DSH; a text reply
+cannot approve a command. Expired, cancelled or already-answered requests cannot
+answer a different question. Generic attention text keeps prompts, command
+arguments and credentials out of the notification payload. Completed turns can
+notify while the chat is in the background.
 
 Models can also call `notify_user` with a short title and message. This uses the
 normal DSH tool runtime and targets the initiating conversation, including when
 a child agent calls it. It respects Android notification settings and a
 per-conversation rate limit, and reports whether Android accepted the notice.
 This tool does not require a phone-control grant.
+The optional `request_reply: true` argument waits for a text answer and returns
+it to the calling root agent through the normal tool result. Its default is
+false. This option does not grant tool permissions or promote a child agent's
+request into a different conversation.
 
-Open **Settings → Background & notifications** for native service/task status,
-notification permission and the system battery optimization settings. Android
-13 and newer request notification permission only from this settings page.
+Each active conversation has a separate status notification and a row in
+**Settings → Background & notifications**. Summaries distinguish session turns,
+steps and cumulative token consumption from the latest completed model call's
+uncached input, output, total, cache read/write counts and average output rate.
+Context usage comes from DSH's context meter. Missing usage, timing, cache or
+capacity data is shown as unavailable; absent cache counts are not treated as
+zero and no token counts are estimated from text.
+
+Open **Settings → Background & notifications** in the DSH Web UI for live
+service/task status, notification permission and battery optimization status.
+These sections use DSH's existing components, theme and selected interface
+language. Their buttons open Android's system notification and battery settings;
+they do not open a separate native settings page. Android 13 and newer request
+notification permission only after the user presses the notification button.
+App-owned Android notifications, reply actions and operation messages also
+follow DSH's effective Chinese or English setting, with English as the fallback.
+Changing DSH's language updates them without restarting its service or chat.
+Android's system settings and document picker use the system's language.
 Battery exceptions are an explicit system choice. A system force-stop or
 process kill interrupts in-flight work; saved conversations remain available,
 and the app does not automatically replay interrupted tool actions.
@@ -75,9 +97,29 @@ move an existing conversation's working directory. Cancellation leaves the
 previous selection intact.
 
 The workspace backend uses ordinary file paths under Android's app permissions.
-External SAF `content://` trees are not filesystem workspaces. Attachment
-import and document export use their separate Android pickers. See
+The DSH workspace chooser also offers **Choose a phone folder**, which opens
+Android's system folder picker. Shared-storage projects require the Android 11+
+**All files access** special permission, requested only after this explicit
+choice. Local primary and removable-storage folders are mapped to verified real
+filesystem paths; cloud providers, protected Android data/obb folders, volume
+roots and unmappable providers are rejected with a DSH-language error.
+Cancellation and permission refusal preserve the prior session and workspace.
+The app-private directory option needs no storage permission.
+
+A single-folder SAF URI grant does not authorize Node/Bash POSIX path access;
+this version uses All files access for shared-storage workspaces and does not
+claim folder-only or cloud-workspace support. Android's permission does not
+change DSH's selected file-tool write policy or command approvals. Attachment
+import and document export keep their separate Android pickers. See
 [WORKSPACES.md](WORKSPACES.md) for the supported paths and verification steps.
+
+New-file creation keeps atomic no-replace rename where supported. Shared
+storage that rejects rename flags uses an exclusive create, followed by copying
+and checking the staged bytes. Existing names are never overwritten, but other
+processes may see the new file before copying finishes. Cancellation, I/O
+failure, or a crash can leave a partial file; read it before repairing or
+retrying. Failure cleanup does not delete the public destination. Existing-file
+version checks and replacements retain their original path.
 
 ## File access and command approvals
 
@@ -94,29 +136,40 @@ and verification commands.
 
 ## Mobile use
 
-DSH's Settings page includes a **Mobile use** tab that opens native controls.
-Enable **DSH phone control** in Android Accessibility Settings, then return and
-choose **Allow this task**. Enabling the accessibility service alone leaves
-control paused. The native page, notification's **Pause control** action, and
+DSH's Settings page includes a **Mobile use** section.
+Enable **DSH phone control** in Android Accessibility Settings, then return to
+the same DSH settings section and choose **Allow this task**. Enabling the accessibility service alone leaves
+control paused. The DSH settings section, notification's **Pause control** action, and
 `mobile_stop` revoke the current grant. DSH host restarts, service disconnects,
 and a locked display require another native grant.
 
+The Mobile use settings section remains inside DSH's Web UI. Its status rows,
+Allow this task, Pause and feedback toggle use the existing DSH controls and
+current DSH language. The accessibility button opens Android's own settings.
+Control changes require an explicit user gesture; the model tools cannot grant
+themselves control through the WebView.
+
 The APK registers `mobile_status`, `mobile_list_apps`, `mobile_open_app`,
-`mobile_observe`, `mobile_click`, `mobile_type`, `mobile_swipe`, `mobile_back`,
+`mobile_observe`, `mobile_click`, `mobile_type`, `mobile_swipe`, `mobile_scroll`, `mobile_back`,
 and `mobile_stop` in DSH's existing
 tool runtime. Observation supplies bounded accessibility nodes. Image-capable
-models also receive a real Android screenshot as a DSH image attachment;
-text-only models receive the node tree with an explicit screenshot omission.
+models can explicitly request a real Android screenshot as a DSH image attachment.
+Observation defaults to real accessibility text, hierarchy, bounds and available
+actions for every model; text-only operation does not need a screenshot.
 Android 11 screenshots require at least 1100 ms between captures.
 
 Phone control operates on the foreground window. `mobile_open_app` brings an
 enabled launcher app to the foreground; it cannot click a hidden background
 window. Native click and swipe feedback shows where the action occurred without
-intercepting touches. The native control page lets the user turn feedback off,
+intercepting touches. The DSH settings section lets the user turn feedback off,
 and observation excludes the feedback layer. See [mobile-details.md](mobile-details.md).
 
-Actions require the current native grant and a recent observation of the same
-window. Observe again after every action or stale-observation error. Text input
+Launching an enabled app requires the current native grant and its validated
+launcher package, without requiring a prior screen observation. Node clicks,
+text input and node scrolling revalidate the actual target and support a
+five-minute observation lifetime; Back retains a 30-second observation limit,
+and coordinate clicks and swipes also check screen changes. Observe again after an action or
+stale-observation error. Text input
 replaces the selected editable field; password text is hidden and password
 input is refused. A successful action reports Android's acceptance, so a new
 observation is needed to confirm its visible result. Pause prevents further
