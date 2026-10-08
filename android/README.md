@@ -167,8 +167,12 @@ and observation excludes the feedback layer. See [mobile-details.md](mobile-deta
 Launching an enabled app requires the current native grant and its validated
 launcher package, without requiring a prior screen observation. Node clicks,
 text input and node scrolling revalidate the actual target and support a
-five-minute observation lifetime; Back retains a 30-second observation limit,
-and coordinate clicks and swipes also check screen changes. Observe again after an action or
+five-minute observation lifetime. Back and coordinate gestures have the same
+five-minute model-wait allowance; coordinate clicks and swipes additionally
+require an unchanged screen revision. The lifetime uses a monotonic clock, so
+system time corrections cannot expire or renew a binding. Errors distinguish
+time expiry, a consumed/replaced binding, an agent/session mismatch, a changed
+window/screen and a changed target without disclosing native error text. Observe again after an action or
 stale-observation error. Text input
 replaces the selected editable field; password text is hidden and password
 input is refused. A successful action reports Android's acceptance, so a new

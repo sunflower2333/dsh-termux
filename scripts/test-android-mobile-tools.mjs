@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import http from "node:http";
+import { performance } from "node:perf_hooks";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, writeFile, symlink, copyFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -391,27 +392,81 @@ test("default observations are text-first even for a vision route, with pure JSO
   assert.match(guide, /n3 \[scroll\]/); assert.match(guide, /scroll_forward,scroll_backward/);
   assert.ok(!JSON.stringify(result).includes("fixture-secret")); assert.ok(!result.content.some(block => block.type === "image"));
 });
-test("node bindings survive slow inference while coordinates/swipes expire at thirty seconds and node actions never cross agents", async t => {
+test("every binding expires after five minutes and observations cannot cross agents", async t => {
   const r = await runtime();
   const value = await r.observe(), binding = { sessionId: SESSION, observationId: value.observationId };
-  const received = Date.now();
-  t.mock.method(Date, "now", () => received + LIMITS.screenObservationAgeMs + 1);
+  const calls = r.native.calls.length;
+  const other = { ...r.agent, id: randomUUID() };
+  const wrongOwner = await r.execute("mobile_click", { ...binding, nodeId: "n0" }, undefined, other);
+  assert.equal(code(wrongOwner), "MOBILE_STALE_OBSERVATION");
+  assert.match(wrongOwner.content[0].text, /belongs to another DSH agent/);
+  const received = performance.now();
+  t.mock.method(performance, "now", () => received + LIMITS.observationAgeMs + 1);
   try {
-    const calls = r.native.calls.length;
-    assert.equal(code(await r.execute("mobile_click", { ...binding, x: 1, y: 1 })), "MOBILE_STALE_OBSERVATION");
-    assert.equal(code(await r.execute("mobile_swipe", { ...binding, fromX: 0, fromY: 0, toX: 10, toY: 10 })), "MOBILE_STALE_OBSERVATION");
-    assert.equal(code(await r.execute("mobile_back", binding)), "MOBILE_STALE_OBSERVATION");
-    const other = { ...r.agent, id: randomUUID() };
-    assert.equal(code(await r.execute("mobile_click", { ...binding, nodeId: "n0" }, undefined, other)), "MOBILE_STALE_OBSERVATION");
+    for (const [action, extra] of [["click", { x: 1, y: 1 }], ["swipe", { fromX: 0, fromY: 0, toX: 10, toY: 10 }], ["back", {}], ["click", { nodeId: "n0" }], ["type", { nodeId: "n1", text: "expired" }], ["scroll", { nodeId: "n3", direction: "forward" }]]) {
+      const result = await r.execute("mobile_" + action, { ...binding, ...extra });
+      assert.equal(code(result), "MOBILE_STALE_OBSERVATION");
+      assert.match(result.content[0].text, /five-minute lifetime/);
+    }
     assert.equal(r.native.calls.length, calls);
-    assert.equal((await r.execute("mobile_click", { ...binding, nodeId: "n0" })).isError, false, "unchanged node action succeeds after the old thirty-second deadline");
   } finally { t.mock.restoreAll(); }
-  const next = await r.observe(); const time = Date.now(); const before = r.native.calls.length;
-  t.mock.method(Date, "now", () => time + LIMITS.observationAgeMs + 1);
+});
+test("a ninety-second model wait does not expire unchanged coordinate, swipe or Back bindings", async t => {
+  const r = await runtime();
+  for (const [action, extra] of [["click", { x: 1, y: 1 }], ["swipe", { fromX: 0, fromY: 0, toX: 10, toY: 10 }], ["back", {}]]) {
+    const value = await r.observe();
+    const received = performance.now();
+    t.mock.method(performance, "now", () => received + 90_000);
+    try {
+      const result = await r.execute("mobile_" + action, { sessionId: SESSION, observationId: value.observationId, ...extra });
+      assert.equal(result.isError, false, `${action}: ${result.content[0]?.text}`);
+      assert.equal(r.native.calls.at(-1).path, `/v1/mobile/${action}`);
+    } finally { t.mock.restoreAll(); }
+  }
+});
+test("wall-clock corrections cannot expire or renew an observation", async t => {
+  const r = await runtime();
+  for (const offset of [-86_400_000, 86_400_000]) {
+    const value = await r.observe(), wall = Date.now();
+    t.mock.method(Date, "now", () => wall + offset);
+    try {
+      const result = await r.execute("mobile_click", { sessionId: SESSION, observationId: value.observationId, nodeId: "n0" });
+      assert.equal(result.isError, false);
+    } finally { t.mock.restoreAll(); }
+  }
+  const value = await r.observe(), monotonic = performance.now(), wall = Date.now();
+  t.mock.method(Date, "now", () => wall - 86_400_000);
+  t.mock.method(performance, "now", () => monotonic + LIMITS.observationAgeMs + 1);
   try {
-    assert.equal(code(await r.execute("mobile_type", { sessionId: SESSION, observationId: next.observationId, nodeId: "n1", text: "expired" })), "MOBILE_STALE_OBSERVATION");
-    assert.equal(r.native.calls.length, before);
+    const result = await r.execute("mobile_back", { sessionId: SESSION, observationId: value.observationId });
+    assert.equal(code(result), "MOBILE_STALE_OBSERVATION");
+    assert.match(result.content[0].text, /five-minute lifetime/);
   } finally { t.mock.restoreAll(); }
+});
+test("binding diagnostics distinguish consumed, replaced, session, window, screen and target failures without leaking native text", async () => {
+  const r = await runtime();
+  const old = await r.observe(), current = await r.observe();
+  const replaced = await r.execute("mobile_back", { sessionId: SESSION, observationId: old.observationId });
+  assert.match(replaced.content[0].text, /replaced by a newer observation/);
+  const session = await r.execute("mobile_back", { sessionId: randomUUID(), observationId: current.observationId });
+  assert.match(session.content[0].text, /phone-control session changed/);
+  const args = { sessionId: SESSION, observationId: current.observationId };
+  assert.equal((await r.execute("mobile_back", args)).isError, false);
+  const consumed = await r.execute("mobile_back", args);
+  assert.match(consumed.content[0].text, /consumed the previous binding/);
+  const errors = await bridge(call => ({ ok: false, error: { code: call.args.fixtureCode, message: TOKEN + " private-screen-text" } }));
+  for (const [reason, expected] of [
+    ["observation_missing", /No unused observation/], ["observation_replaced", /replaced by a newer/],
+    ["observation_owner", /another DSH agent/], ["observation_session", /phone-control session changed/],
+    ["observation_expired", /five-minute lifetime/], ["observation_window_changed", /window or display orientation changed/],
+    ["observation_screen_changed", /Coordinate gestures require an unchanged screen/], ["observation_target_changed", /control disappeared or changed/],
+  ]) {
+    await assert.rejects(createMobileTransport(errors.env)("status", { fixtureCode: reason }), error => {
+      assert.equal(error.code, "MOBILE_STALE_OBSERVATION"); assert.match(error.message, expected);
+      assert.ok(!error.message.includes(TOKEN)); assert.ok(!error.message.includes("private-screen-text"));
+      return true;
+    });
+  }
 });
 test("reported enabled/visible/scroll actions are enforced without silently clicking coordinates or retrying stale native actions", async () => {
   for (const [changes, tool, args, expected] of [
@@ -626,8 +681,8 @@ test("launcher opening is independent of screen observations while the native cu
   assert.equal((await r.execute("mobile_open_app", args, undefined, other)).isError, false, "launcher opening is not a screen-target action");
   assert.equal(code(await r.execute("mobile_open_app", { ...args, sessionId: randomUUID() })), "MOBILE_INVALID_SESSION");
   assert.equal((await r.execute("mobile_open_app", { ...args, observationId: randomUUID() })).isError, false, "legacy observation field is only compatibility metadata");
-  const now = Date.now();
-  t.mock.method(Date, "now", () => now + LIMITS.observationAgeMs + 1);
+  const now = performance.now();
+  t.mock.method(performance, "now", () => now + LIMITS.observationAgeMs + 1);
   try {
     assert.equal((await r.execute("mobile_open_app", args)).isError, false, "slow inference never expires a screen-independent launcher request");
   } finally { t.mock.restoreAll(); }

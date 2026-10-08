@@ -139,21 +139,32 @@ class MobileAccessibilityService : AccessibilityService() {
                 requireCurrent()
                 when (command) {
                     is MobileCommand.Observe -> {
-                        fun captureAfterFeedback() {
+                        observation = null
+                        var retries = 0
+                        lateinit var captureAfterFeedback: () -> Unit
+                        fun observationResult(value: JSONObject) {
+                            val delay = if (!value.optBoolean("ok")) MobileObservationPolicy.observationRetryDelay(
+                                value.optJSONObject("error")?.optString("code"), command.screenshot, retries) else null
+                            if (!finished.get() && delay != null) {
+                                retries++
+                                main.postDelayed({ captureAfterFeedback() }, delay)
+                            } else finish(value)
+                        }
+                        captureAfterFeedback = {
                             try {
                                 requireCurrent()
                                 val delay = feedback.captureDelayMs()
                                 if (delay > 0) main.postDelayed({ captureAfterFeedback() }, delay)
-                                else observe(command, grant, ::finish, ::requireCurrent) { finished.get() }
+                                else observe(command, grant, ::observationResult, ::requireCurrent) { finished.get() }
                             } catch (error: NativeFailure) {
-                                finish(MobileUseController.failure(error.code, error.message ?: "Observation unavailable"))
+                                observationResult(MobileUseController.failure(error.code, error.message ?: "Observation unavailable"))
                             } catch (_: Exception) { finish(MobileUseController.failure("internal", "The phone observation failed")) }
                         }
                         captureAfterFeedback()
                     }
                     is MobileCommand.Click -> {
                         val snapshot = requireObservation(command.observationId, grant,
-                            strictRevision = command.nodeId == null, nodeTarget = command.nodeId != null)
+                            strictRevision = command.nodeId == null)
                         if (command.nodeId != null) {
                             var outline: Rect? = null
                             val accepted = withTarget(snapshot, command.nodeId) { node ->
@@ -181,7 +192,7 @@ class MobileAccessibilityService : AccessibilityService() {
                         }
                     }
                     is MobileCommand.Type -> {
-                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false, nodeTarget = true)
+                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false)
                         var outline: Rect? = null
                         val accepted = withTarget(snapshot, command.nodeId) { node ->
                             if (node.isPassword) throw NativeFailure("password_field", "Phone control cannot fill password fields")
@@ -212,7 +223,7 @@ class MobileAccessibilityService : AccessibilityService() {
                             command.observationId, "swipe", ::finish)
                     }
                     is MobileCommand.Scroll -> {
-                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false, nodeTarget = true)
+                        val snapshot = requireObservation(command.observationId, grant, strictRevision = false)
                         var outline: Rect? = null
                         val action = if (command.direction == "forward") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                             else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
@@ -349,7 +360,7 @@ class MobileAccessibilityService : AccessibilityService() {
             if (cancelled()) return
             requireCurrent()
             if (!sameWindow(snapshot)) {
-                throw NativeFailure("stale_observation", "The screen changed during observation; observe again")
+                throw NativeFailure("observation_window_changed", "The screen changed during observation; observe again")
             }
             // Background chat updates need not invalidate an unchanged node.
             // Coordinates still compare the captured content revision before acting.
@@ -414,15 +425,13 @@ class MobileAccessibilityService : AccessibilityService() {
         })
     }
 
-    private fun requireObservation(id: String, grant: MobileUseController.Grant, strictRevision: Boolean = true,
-        nodeTarget: Boolean = false): Observation {
+    private fun requireObservation(id: String, grant: MobileUseController.Grant, strictRevision: Boolean = true): Observation {
         requireGrant(grant)
-        val snapshot = observation
-        if (snapshot == null || snapshot.id != id || snapshot.session != grant.sessionId ||
-            !MobileObservationPolicy.fresh(snapshot.issuedAt, SystemClock.uptimeMillis(), nodeTarget) ||
-            (strictRevision && snapshot.revision != revision.get()) || !sameWindow(snapshot)) {
-            throw NativeFailure("stale_observation", "Observe the current screen before acting")
-        }
+        val snapshot = observation ?: throw NativeFailure("observation_missing", "No unused observation is available")
+        val reason = MobileObservationPolicy.invalidReason(snapshot.id == id, snapshot.session == grant.sessionId,
+            MobileObservationPolicy.fresh(snapshot.issuedAt, SystemClock.uptimeMillis()), sameWindow(snapshot),
+            snapshot.revision == revision.get(), strictRevision)
+        if (reason != null) throw NativeFailure(reason, "Observe the current screen before acting")
         return snapshot
     }
 
@@ -435,14 +444,14 @@ class MobileAccessibilityService : AccessibilityService() {
 
     private fun <T> withTarget(snapshot: Observation, id: String, block: (AccessibilityNodeInfo) -> T): T {
         val expected = snapshot.targets[id] ?: throw NativeFailure("unknown_node", "The node is not part of this observation")
-        var current = rootInActiveWindow ?: throw NativeFailure("stale_observation", "The observed window is gone")
+        var current = rootInActiveWindow ?: throw NativeFailure("observation_window_changed", "The observed window is gone")
         try {
             for (index in expected.path) {
-                val child = current.getChild(index) ?: throw NativeFailure("stale_observation", "The observed node is gone")
+                val child = current.getChild(index) ?: throw NativeFailure("observation_target_changed", "The observed node is gone")
                 current.recycle()
                 current = child
             }
-            if (!current.refresh()) throw NativeFailure("stale_observation", "The observed node is gone")
+            if (!current.refresh()) throw NativeFailure("observation_target_changed", "The observed node is gone")
             val bounds = Rect().also(current::getBoundsInScreen)
             if (current.windowId != snapshot.window || current.className?.toString() != expected.className ||
                 current.viewIdResourceName != expected.viewId || current.packageName?.toString() != expected.packageName ||
@@ -451,7 +460,7 @@ class MobileAccessibilityService : AccessibilityService() {
                 current.isScrollable != expected.scrollable ||
                 (!current.isPassword && (current.text?.toString()?.take(MAX_TEXT) != expected.text ||
                     current.contentDescription?.toString()?.take(MAX_TEXT) != expected.description))) {
-                throw NativeFailure("stale_observation", "The observed node changed; observe again")
+                throw NativeFailure("observation_target_changed", "The observed node changed; observe again")
             }
             return block(current)
         } finally { current.recycle() }
