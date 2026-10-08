@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RuntimeSessionSummaryTest {
+    @Test fun liveAssistantPreviewIsOptionalStrictAndBoundedByUnicodeCodePoints() {
+        assertNull(RuntimeSessionSummary.parse(fields()).activity)
+        assertEquals("thinking", RuntimeSessionSummary.parse(fields() + ("activity" to mapOf("phase" to "thinking", "text" to "思考内容"))).activity?.phase)
+        assertEquals(480, RuntimeSessionActivity.parse(mapOf("phase" to "responding", "text" to "🎉".repeat(240))).text.length)
+        for (activity in listOf(mapOf("phase" to "unknown", "text" to "x"), mapOf("phase" to "tool", "text" to "x\n"),
+            mapOf("phase" to "responding", "text" to "x".repeat(241)), mapOf("phase" to "thinking", "text" to "ok", "signature" to "private"))) {
+            try { RuntimeSessionSummary.parse(fields() + ("activity" to activity)); fail("Invalid live preview accepted") } catch (_: IllegalArgumentException) { }
+        }
+    }
     private fun fields(): Map<String, Any?> = mapOf("sessionId" to "session-1", "name" to null, "state" to "running", "turns" to 1L, "steps" to 2L,
         "inputTokens" to 100L, "outputTokens" to 400L, "totalTokens" to 2800L, "cachedInputTokens" to 2000L, "cacheWriteTokens" to 300L,
         "sessionTokens" to 5600L, "tokensPerSecond" to 25.0, "contextUsed" to 2400L, "contextCapacity" to 8000L)

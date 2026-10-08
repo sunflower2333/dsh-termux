@@ -275,6 +275,22 @@ function renderSection(name, locale, nativeStatus, overrides = {}, openSession) 
   return { tree, nodes, text: text.join(" "), styles: capturedStyles, requests, stateWrites };
 }
 
+test("ColorOS 16 live update controls use DSH translations and a trusted native settings action", async () => {
+  const native = status({ notifications: { liveUpdatesSupported: true, liveUpdatesEnabled: false } });
+  const page = renderSection("AndroidRuntimeSection", "en", native);
+  assert.ok(page.text.includes("Live updates / Fluid Cloud"));
+  assert.ok(page.text.includes("Live update settings"));
+  assert.ok(renderSection("AndroidRuntimeSection", "zh", native).text.includes("实时通知 / 流体云"));
+  assert.ok(!renderSection("AndroidRuntimeSection", "en", status()).text.includes("Live update settings"));
+  const t = transport(), p = t.port(); t.connect(p);
+  await assert.rejects(t.api.request("open-live-updates", undefined, { isTrusted: false }), { message: "user_gesture_required" });
+  const request = t.api.request("open-live-updates", undefined, { isTrusted: true });
+  assert.equal(p.sent[0].type, "open-live-updates");
+  t.respond(p, { id: p.sent[0].id, ok: true, status: native });
+  await request;
+  assert.equal(t.api.getSnapshot().status.notifications.liveUpdatesSupported, true);
+});
+
 test("real sections use English DSH labels even when Android locale is Chinese", () => {
   for (const name of ["AndroidMobileUseSection", "AndroidRuntimeSection"]) {
     const page = renderSection(name, "en", status());

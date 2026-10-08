@@ -182,6 +182,12 @@ internal class AndroidSettingsBridge(
                 "open-accessibility" -> openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 "open-battery" -> openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                 "open-notifications" -> configureNotifications()
+                "open-live-updates" -> {
+                    val intent = Intent("android.settings.APP_NOTIFICATION_PROMOTION_SETTINGS")
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                    if (Build.VERSION.SDK_INT >= 36 && intent.resolveActivity(activity.packageManager) != null) openSettings(intent)
+                    else configureNotifications()
+                }
                 else -> "invalid_request"
             }
         } catch (_: SecurityException) { "settings_unavailable" }
@@ -249,7 +255,10 @@ internal class AndroidSettingsBridge(
                 .put("sessions", sessions).put("sessionsComplete", runtime.sessionsComplete && runtime.sessions.size <= 64))
             .put("notifications", JSONObject().put("enabled", permissionGranted && manager.areNotificationsEnabled())
                 .put("permissionRequired", Build.VERSION.SDK_INT >= 33).put("permissionGranted", permissionGranted)
-                .put("channelsDisabled", disabledChannel))
+                .put("channelsDisabled", disabledChannel)
+                .put("liveUpdatesSupported", Build.VERSION.SDK_INT >= 36)
+                .put("liveUpdatesEnabled", Build.VERSION.SDK_INT >= 36 && permissionGranted && manager.areNotificationsEnabled() &&
+                    runCatching { NotificationManager::class.java.getMethod("canPostPromotedNotifications").invoke(manager) == true }.getOrDefault(false)))
             .put("battery", JSONObject().put("unrestricted", activity.getSystemService(PowerManager::class.java)
                 .isIgnoringBatteryOptimizations(activity.packageName)))
     }

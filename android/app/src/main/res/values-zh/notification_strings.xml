@@ -1,4 +1,11 @@
 <resources>
+    <string name="live_thinking">正在思考</string>
+    <string name="live_responding">正在回答</string>
+    <string name="live_tool">正在运行工具</string>
+    <string name="live_waiting_short">等待回复</string>
+    <string name="live_thinking_short">思考中</string>
+    <string name="live_responding_short">回答中</string>
+    <string name="live_tool_short">运行中</string>
     <string name="notification_reply_label">填写回答</string>
     <string name="notification_reply_action">回复</string>
     <string name="running_session_channel">正在进行的会话</string>

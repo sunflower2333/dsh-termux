@@ -218,6 +218,7 @@ class MainActivity : Activity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun buildView(): View {
+        var keyboardWasVisible = false
         val root = FrameLayout(this).apply {
             // Keep the official window launch logo visible until DSH mounts.
             setBackgroundColor(Color.TRANSPARENT)
@@ -228,6 +229,16 @@ class MainActivity : Activity() {
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
                 val keyboard = insets.getInsets(WindowInsets.Type.ime())
                 view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+                val keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
+                if (keyboardWasVisible && !keyboardVisible) {
+                    // WebView can keep the native pan it applied to a focused
+                    // input after IME dismissal. Recenter fixed DSH dialogs
+                    // without changing any chat/list element's scroll position.
+                    view.post {
+                        if (::webView.isInitialized) webView.scrollTo(0, 0)
+                    }
+                }
+                keyboardWasVisible = keyboardVisible
                 insets
             }
         }

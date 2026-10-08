@@ -9,7 +9,7 @@ internal object AndroidSettingsPolicy {
     private val idPattern = Regex("[A-Za-z0-9._:-]{1,64}")
     private val packagePattern = Regex("[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+")
     private val types = setOf("status", "open-accessibility", "allow-control", "pause-control",
-        "set-feedback", "open-notifications", "open-battery", "sync-language")
+        "set-feedback", "open-notifications", "open-live-updates", "open-battery", "sync-language")
     private val reasons = setOf("disabled", "disconnected", "device_locked", "user_paused", "user_grant",
         "host_started", "host_stopped", "service_disconnected", "service_interrupted", "unavailable")
 

@@ -187,7 +187,10 @@ internal class MobileBridge(context: Context,
                 reader.isLenient = false
                 if (reader.peek() != JsonToken.BEGIN_OBJECT) throw IllegalArgumentException()
                 fun value(depth: Int): Any? {
-                    require(depth <= 2)
+                    // sessions[] -> summary -> optional assistant activity.
+                    // HostEventProtocol validates that sole nested structure;
+                    // ordinary mobile/notice commands remain flat.
+                    require(depth <= 3)
                     return when (reader.peek()) {
                         JsonToken.STRING -> reader.nextString()
                         JsonToken.BOOLEAN -> reader.nextBoolean()
@@ -200,7 +203,7 @@ internal class MobileBridge(context: Context,
                             reader.endArray(); items
                         }
                         JsonToken.BEGIN_OBJECT -> {
-                            require(structured && depth == 1)
+                            require(structured && depth in 1..2)
                             reader.beginObject(); val fields = LinkedHashMap<String, Any?>()
                             while (reader.hasNext()) {
                                 val key = reader.nextName(); require(key.length <= 64 && key !in fields && fields.size < 16)

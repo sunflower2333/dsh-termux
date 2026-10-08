@@ -1,4 +1,11 @@
 <resources>
+    <string name="live_thinking">Thinking</string>
+    <string name="live_responding">Responding</string>
+    <string name="live_tool">Running tools</string>
+    <string name="live_waiting_short">Reply</string>
+    <string name="live_thinking_short">Think</string>
+    <string name="live_responding_short">Replying</string>
+    <string name="live_tool_short">Working</string>
     <string name="notification_reply_label">Your answer</string>
     <string name="notification_reply_action">Reply</string>
     <string name="running_session_channel">Active conversations</string>

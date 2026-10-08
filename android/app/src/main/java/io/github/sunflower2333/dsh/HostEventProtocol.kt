@@ -1,6 +1,6 @@
 package io.github.sunflower2333.dsh
 
-/** Only aggregate task state and opaque IDs cross the native notification bridge. */
+/** Strict task state, opaque targets and bounded assistant previews cross the private bridge. */
 internal data class HostEvent(
     val epoch: String,
     val sequence: Long,

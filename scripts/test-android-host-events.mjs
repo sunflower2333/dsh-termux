@@ -16,7 +16,7 @@ const work = await mkdtemp(join(tmpdir(), "dsh-host-events-test-"));
 await symlink(resolve(packageRoot, "node_modules"), join(work, "node_modules"));
 await copyFile(new URL("./android-host-events.mjs", import.meta.url), join(work, "helper.mjs"));
 const HostEvents = await import(pathToFileURL(join(work, "helper.mjs")));
-const { createHostEventTransport, createNotificationTransport, observeHostEvents, registerNotificationTool, createSessionMetrics } = HostEvents;
+const { createHostEventTransport, createNotificationTransport, observeHostEvents, registerNotificationTool, createSessionMetrics, livePreviewText } = HostEvents;
 const askFile = join(work, "ask-user.mjs");
 const askPatchRoot = join(work, "ask-patch");
 const askPatchFile = join(askPatchRoot, "node_modules/@deepseek-ai/dsh-tool-ask-user/lib/index.js");
@@ -57,11 +57,12 @@ async function nativeBridge(handler = (_payload, _res, path) => ({ ok: true, val
   resources.push(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return { calls, requests, token, env: { DSH_ANDROID_MOBILE_SOCKET: socket, DSH_ANDROID_MOBILE_TOKEN: token } };
 }
-async function runtime({ mode = "legacy", policy = "ask", native, heartbeatMs = 15000, notices = false, replyClock, usage } = {}) {
+async function runtime({ mode = "legacy", policy = "ask", native, heartbeatMs = 15000, notices = false, replyClock, usage, previewMs = 1000 } = {}) {
   native ??= await nativeBridge();
   const ctx = new Context();
   for (const [plugin, config] of [[SystemPrompt, {}], [ToolRuntime, {}], [AgentRegistry], [SessionStore], [SessionProjectionRegistry], [LlmRuntime], [UserQuestionService], [ApprovalService, { policy }]]) await ctx.plugin(plugin, config);
   const questions = gate(), approvals = gate(), busy = gate();
+  const previewRespond = gate(), previewFinish = gate();
   const errors = [], resolutions = [], modelSteps = new Map();
   ctx.on("agent/error", event => errors.push(event.error), { global: true });
   let providerActive = 0, providerCancelled = 0, providerFinished = 0;
@@ -91,6 +92,18 @@ async function runtime({ mode = "legacy", policy = "ask", native, heartbeatMs = 
       const step = (modelSteps.get(agent.id) ?? 0) + 1; modelSteps.set(agent.id, step);
       const text = request.messages.find(message => message.role === "user")?.content.find(block => block.type === "text")?.text ?? "";
       if (text.startsWith("busy")) await busy.promise;
+      if (text.startsWith("preview")) {
+        yield { type: "block-start", index: 0, blockType: "reasoning" };
+        for (let index = 0; index < 300; index++) yield { type: "reasoning-delta", index: 0, text: "思考片段 " };
+        await previewRespond.promise;
+        yield { type: "block-end", index: 0, block: { type: "reasoning", text: "思考片段 ".repeat(300) } };
+        yield { type: "block-start", index: 1, blockType: "text" };
+        yield { type: "text-delta", index: 1, text: "Live response fixture." };
+        await previewFinish.promise;
+        yield { type: "block-end", index: 1, block: { type: "text", text: "Live response fixture." } };
+        yield { type: "finish", reason: { kind: "stop" } };
+        return;
+      }
       if (step === 1 && !text.startsWith("busy")) {
         const name = text.startsWith("approval") ? "fixture_approval" : text.startsWith("notice") ? "notify_user" : "ask_user_question";
         const args = name === "fixture_approval" ? {} : name === "notify_user" ? { title: "Task ready", message: "Return to this conversation.", ...(text.startsWith("notice-reply") ? { request_reply: true } : {}) } : { questions: [{ id: "fixture-choice", question: marker, options: [{ label: "Continue" }] }], ...(mode === "timed" ? { timeout: 1 } : {}) };
@@ -112,14 +125,14 @@ async function runtime({ mode = "legacy", policy = "ask", native, heartbeatMs = 
   ctx.llm.registerAdapter(["fixture-native-notifications"], new FixtureAdapter());
   await ctx.plugin(AgentLoop, {});
   const sdkAnswerDescriptor = Object.getOwnPropertyDescriptor(ctx.userQuestions, "answer");
-  const observer = observeHostEvents(ctx, createHostEventTransport(native.env), { heartbeatMs, ...(replyClock ? { now: replyClock } : {}) });
-  resources.push(async () => { questions.resolve({ answers: [{ id: "fixture-choice", selected: ["Continue"] }] }); approvals.resolve("cancelled"); busy.resolve(); await observer.close(); await ctx.fiber.dispose(); });
+  const observer = observeHostEvents(ctx, createHostEventTransport(native.env), { heartbeatMs, previewMs, ...(replyClock ? { now: replyClock } : {}) });
+  resources.push(async () => { questions.resolve({ answers: [{ id: "fixture-choice", selected: ["Continue"] }] }); approvals.resolve("cancelled"); busy.resolve(); previewRespond.resolve(); previewFinish.resolve(); await observer.close(); await ctx.fiber.dispose(); });
   const run = async kind => {
     const agent = await ctx.agentLoop.create("session-" + randomUUID(), { provider: "fixture-native-notifications", model: "fixture" });
     agent.followup(createUserMessage({ source: { kind: "user" }, content: [{ type: "text", text: `${kind} ${marker}` }] }));
     return agent;
   };
-  return { ctx, observer, native, questions, approvals, busy, resolutions, errors, run, sdkAnswerDescriptor, providerState: () => ({ active: providerActive, cancelled: providerCancelled, finished: providerFinished }) };
+  return { ctx, observer, native, questions, approvals, busy, previewRespond, previewFinish, resolutions, errors, run, sdkAnswerDescriptor, providerState: () => ({ active: providerActive, cancelled: providerCancelled, finished: providerFinished }) };
 }
 
 test("APK patch is checked/idempotent and canonical real web-app input stays byte identical", async () => {
@@ -512,4 +525,29 @@ test("actual active root summaries bound the private packet and explicitly repor
   assert.equal(new Set(packet.sessions.map(row => row.sessionId)).size, packet.sessions.length);
   r.busy.resolve(); await Promise.all(agents.map(agent => agent.whenIdle())); await r.observer.flush();
   assert.deepEqual(r.native.calls.at(-1).sessions, []); assert.equal(r.native.calls.at(-1).sessionsComplete, true);
+});
+
+test("real AgentLoop reasoning/text chunks coalesce, switch phases and vanish when the turn completes", async () => {
+  const r = await runtime({ previewMs: 50 });
+  const agent = await r.run("preview");
+  await until(() => r.native.calls.some(packet => packet.sessions?.some(row => row.activity?.text.includes("思考片段"))), "live reasoning preview");
+  const thinking = r.native.calls.flatMap(packet => packet.sessions ?? []).filter(row => row.activity?.text.includes("思考片段"));
+  assert.ok(thinking.length < 10, "300 deltas must not become 300 notifications");
+  assert.ok(thinking.every(row => row.activity.phase === "thinking" && Array.from(row.activity.text).length <= 240));
+  assert.ok(!JSON.stringify(r.native.calls).includes(marker));
+  r.previewRespond.resolve();
+  await until(() => r.native.calls.some(packet => packet.sessions?.some(row => row.activity?.text === "Live response fixture.")), "live response preview");
+  const response = r.native.calls.flatMap(packet => packet.sessions ?? []).find(row => row.activity?.text === "Live response fixture.");
+  assert.equal(response.activity.phase, "responding");
+  r.previewFinish.resolve(); await agent.whenIdle(); await r.observer.flush();
+  assert.deepEqual(r.native.calls.at(-1).sessions, []);
+  assert.deepEqual(r.errors, []);
+});
+
+test("preview bounds Unicode, strips controls and redacts recognized API-key forms", () => {
+  const text = livePreviewText("\u0000line\nvalue nvapi-" + "q".repeat(50) + " sk-or-v1-" + "a".repeat(64));
+  assert.ok(!text.includes("q".repeat(12)) && !text.includes("a".repeat(12)));
+  assert.ok(!/[\u0000-\u001f\u007f]/.test(text));
+  const unicode = livePreviewText("🎉".repeat(1000));
+  assert.equal(Array.from(unicode).length, 240); assert.equal(unicode.length, 480);
 });

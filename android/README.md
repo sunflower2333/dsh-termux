@@ -38,6 +38,23 @@ node scripts/test-android-settings.mjs /path/to/dsh-package
 
 ## Background tasks and conversation notifications
 
+Active conversation notifications include a live, bounded preview of the
+assistant's streamed thinking or response (240 Unicode characters, coalesced
+at one update per second). Tool arguments and user prompts are not included.
+Changing from thinking to answering replaces the preview; a finished or
+disconnected conversation loses its ongoing notification. The notification
+keeps its per-session counters and opens the exact conversation when tapped.
+Private lock-screen content uses a generic public version.
+
+On Android 16, including ColorOS 16, these ongoing notifications request
+promotion through Android's Live Updates API, the public Fluid Cloud entry
+point. The system decides eligibility and presentation. In DSH **Settings →
+Background**, **Live update settings** opens the system promotion settings,
+falling back to app notification settings on devices without that screen.
+Allow live updates there; ordinary conversation notifications remain available
+on Android 11–15. No media playback, overlay, vendor whitelist bypass or root
+permission is used. Labels follow DSH's selected English/Chinese language.
+
 Switching apps or closing the chat Activity does not stop the foreground DSH
 service. The server owns the active conversation, not the WebView. Its native
 notification distinguishes running tasks, requests waiting for a response and
@@ -388,3 +405,18 @@ This drives DSH's real provider settings, streams, Stop button, queue,
 single-command approval, rejection, and saved conversations. Responses come
 from the fixture; it does not verify real DeepSeek inference. APK lifecycle,
 IME, file dialogs, and native addons must also be tested on Android.
+
+The actual onboarding and upstream-model-picker components can be checked with
+an isolated 500-model catalog and no real credentials. After installing Python
+Playwright and Chromium, run from the repository root against the fully staged
+APK package (the fixture does not modify that package):
+
+```bash
+python3 scripts/test-android-model-dialogs.py /path/to/staged/dsh \
+  --fixture-dir /tmp/dsh-model-dialogs-qa
+```
+
+`--prepare-only` produces the same production-component fixture for WebView
+testing. Browser resizing checks layout; physical Android IME dismissal and
+touch gestures still need device/emulator verification. ColorOS Fluid Cloud
+presentation must be checked on a compatible ColorOS 16 device.

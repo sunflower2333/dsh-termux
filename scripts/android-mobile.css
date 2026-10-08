@@ -626,6 +626,77 @@
   }
   html[data-dsh-android-native] [data-shortcut-modal="settings"][role="dialog"] { overflow: hidden !important; }
 
+  /* A modal has one scroll owner. In particular the upstream model picker
+     must not scroll its card and its list independently under a finger. */
+  html[data-dsh-android-native] ._root_o6lrb_6 {
+    box-sizing: border-box !important;
+    min-height: 0 !important;
+    padding: 12px !important;
+    overflow: hidden !important;
+  }
+  html[data-dsh-android-native] .jLrgrW_dialog {
+    max-height: 100% !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+    flex-shrink: 1 !important;
+  }
+  html[data-dsh-android-native] .jLrgrW_content {
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_fetchDialog {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    overflow: hidden !important;
+    padding-bottom: 12px !important;
+    gap: 12px !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_fetchDialog > ._content_o6lrb_63 {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_fetchDialog ._body_o6lrb_115 {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    margin-top: 12px !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_candidateToolbar {
+    flex: none !important;
+    flex-wrap: wrap !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_candidateSearch {
+    flex: 1 1 140px !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_candidateList {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_candidate {
+    flex: none !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_candidateLabel {
+    min-height: 48px !important;
+    box-sizing: border-box !important;
+    touch-action: pan-y !important;
+  }
+  html[data-dsh-android-native] .zGbnIq_candidateLabel input[type="checkbox"] {
+    min-height: 0 !important;
+    height: 18px !important;
+    width: 18px !important;
+    flex: none !important;
+    touch-action: pan-y !important;
+  }
+
   button, input, select, textarea, [role="button"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"] {
     touch-action: manipulation !important;
   }

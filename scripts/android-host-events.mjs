@@ -1,4 +1,5 @@
-// APK-only host observer. Native notifications contain no prompts, arguments or credentials.
+// APK-only host observer. Live previews include only bounded assistant output;
+// user prompts, tool arguments, credentials and opaque reasoning signatures stay private.
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -139,10 +140,14 @@ export function registerNotificationTool(ctx, request) {
 
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const finite = value => Number.isFinite(value) && value >= 0 && value <= 1e12 ? value : null;
+export function livePreviewText(value) {
+  return Array.from(String(value).replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/(?:nvapi-|sk-(?:or-v1-)?)[A-Za-z0-9_-]{12,}/g, "[redacted]")).slice(-240).join("").trim();
+}
 /** Exact SDK counters: no text estimates, provider guesses or absent cache-as-zero. */
 export function createSessionMetrics() {
   const states = new WeakMap();
-  const empty = () => ({ turns: 0, steps: 0, name: null, usage: null, capacity: null, firstTime: null, lastTime: null });
+  const empty = () => ({ turns: 0, steps: 0, name: null, usage: null, capacity: null, firstTime: null, lastTime: null, activity: null, preview: "" });
   const times = (state, records) => {
     state.firstTime = null; state.lastTime = null;
     for (const record of records ?? []) {
@@ -155,7 +160,9 @@ export function createSessionMetrics() {
     }
   };
   const fold = (state, event) => {
-    if (event.type === "turn/start") state.turns++;
+    if (event.type === "turn/start") { state.turns++; state.activity = { phase: "thinking", text: "" }; state.preview = ""; }
+    if (["turn/end", "user/message"].includes(event.type)) { state.activity = null; state.preview = ""; }
+    if (["tool/call", "tool/ptc-dispatch"].includes(event.type)) { state.activity = { phase: "tool", text: "" }; state.preview = ""; }
     if (event.type === "step/start") state.steps++;
     if (event.type === "session/title") {
       const value = event.data.title;
@@ -174,7 +181,20 @@ export function createSessionMetrics() {
   };
   return {
     event(session, event) { const state = states.get(session); if (state) fold(state, event); },
-    stream(_agent, _frame) { /* Latest completed-call counters remain stable while another call streams. */ },
+    stream(agent, frame) {
+      const state = stateOf(agent.session);
+      if (frame.type === "start") { state.activity = { phase: "thinking", text: "" }; state.preview = ""; return true; }
+      if (frame.type !== "chunk") return false;
+      const chunk = frame.chunk;
+      const phase = chunk.type === "reasoning-delta" ? "thinking" : chunk.type === "text-delta" ? "responding" : null;
+      if (!phase || typeof chunk.text !== "string") return false;
+      if (state.activity?.phase !== phase) state.preview = "";
+      // Keep a small raw tail for redaction of credentials split across chunks.
+      // Signatures, tool-call deltas and completed historical messages are excluded.
+      state.preview = Array.from(state.preview + chunk.text).slice(-512).join("");
+      state.activity = { phase, text: livePreviewText(state.preview) };
+      return true;
+    },
     read(agent, status, ctx) {
       const state = stateOf(agent.session), usage = state.usage;
       const inputTokens = count(usage?.inputTokens), outputTokens = count(usage?.outputTokens);
@@ -195,14 +215,15 @@ export function createSessionMetrics() {
       return { sessionId: agent.id, name: state.name, state: status, turns: state.turns, steps: state.steps,
         inputTokens, outputTokens, totalTokens, cachedInputTokens, cacheWriteTokens, sessionTokens,
         tokensPerSecond: outputTokens !== null && seconds !== null ? finite(outputTokens / seconds) : null,
-        contextUsed, contextCapacity };
+        contextUsed, contextCapacity, ...(state.activity ? { activity: { ...state.activity } } : {}) };
     },
   };
 }
 
 /** Observe the production registry, durable question fold and existing answerer waterfalls. */
-export function observeHostEvents(ctx, send, { heartbeatMs = LIMITS.heartbeatMs, now = Date.now } = {}) {
+export function observeHostEvents(ctx, send, { heartbeatMs = LIMITS.heartbeatMs, previewMs = 1000, now = Date.now } = {}) {
   let closed = false, epoch = randomUUID(), sequence = 0, pumping = false, needsResync = false;
+  let previewTimer;
   const metrics = createSessionMetrics(), foregroundReplies = new Map(), replyTickets = new Map();
   const queue = [], notifications = new Map(), deliveredCompletions = new Set(), blocking = new Map(), activeJobs = new Map(), disposers = [];
   const root = agent => ID.test(agent?.id ?? "") && ctx.agents.get(agent.id) === agent && ctx.agents.roots().includes(agent);
@@ -429,7 +450,17 @@ export function observeHostEvents(ctx, send, { heartbeatMs = LIMITS.heartbeatMs,
     for (const [key, value] of notifications) if (value.sessionId === agent.id) resolve(key);
     push({});
   });
-  on("agent/assistant-stream", ({ agent, frame }) => { if (root(agent)) { metrics.stream(agent, frame); if (frame.type !== "chunk" || frame.chunk.type === "usage") push({}); } });
+  on("agent/assistant-stream", ({ agent, frame }) => {
+    if (!root(agent)) return;
+    const changed = metrics.stream(agent, frame);
+    if (frame.type !== "chunk" || frame.chunk.type === "usage") push({});
+    else if (changed && !previewTimer) {
+      // One shared trailing update, independent of token rate and agent count.
+      // Heartbeats/attention events still carry the latest preview immediately.
+      previewTimer = setTimeout(() => { previewTimer = undefined; push({}); }, previewMs);
+      previewTimer.unref?.();
+    }
+  });
   on("session/event", (session, event) => {
     metrics.event(session, event);
     if (!["request/header", "tool/call", "tool/result", "tool/ptc-dispatch", "user/message", "turn/start", "turn/end"].includes(event.type)) return;
@@ -450,7 +481,7 @@ export function observeHostEvents(ctx, send, { heartbeatMs = LIMITS.heartbeatMs,
     async close() {
       if (closed) return;
       // A final new epoch revokes all old native notification targets, without touching session state.
-      closed = true; clearInterval(timer);
+      closed = true; clearInterval(timer); clearTimeout(previewTimer); previewTimer = undefined;
       for (const dispose of disposers.reverse()) await dispose();
       queue.length = 0; notifications.clear(); deliveredCompletions.clear(); blocking.clear(); activeJobs.clear(); replyTickets.clear(); foregroundReplies.clear(); send.setReplyHandler?.(undefined);
       // Keep reset after the last in-flight ACK so a delayed old request cannot resurrect state.

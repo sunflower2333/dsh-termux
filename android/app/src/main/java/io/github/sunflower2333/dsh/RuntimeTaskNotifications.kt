@@ -302,15 +302,30 @@ internal class RuntimeTaskNotifications(
                 number(summary.inputTokens), number(summary.outputTokens), number(summary.totalTokens), number(summary.cachedInputTokens), number(summary.cacheWriteTokens),
                 rate, number(summary.contextUsed), number(summary.contextCapacity), hit)
             val title = summary.name ?: DshUiLanguage.text(context, R.string.running_session_title, notificationTag(id).takeLast(5))
-            val stateText = DshUiLanguage.text(context, if (summary.state == "waiting") R.string.running_session_waiting else R.string.running_session_running)
+            val stateText = DshUiLanguage.text(context, when {
+                summary.state == "waiting" -> R.string.running_session_waiting
+                summary.activity?.phase == "thinking" -> R.string.live_thinking
+                summary.activity?.phase == "responding" -> R.string.live_responding
+                summary.activity?.phase == "tool" -> R.string.live_tool
+                else -> R.string.running_session_running
+            })
+            val preview = summary.activity?.text?.takeIf { summary.state != "waiting" && it.isNotBlank() }
+            val content = if (preview == null) stateText else "$stateText · $preview"
             val public = Notification.Builder(context, RUNNING_CHANNEL).setSmallIcon(R.drawable.ic_service)
                 .setContentTitle(DshUiLanguage.text(context, R.string.app_name)).setContentText(DshUiLanguage.text(context, R.string.attention_private)).build()
             val open = if (id in progressNotifications) notificationTickets[id]?.takeIf { NotificationSessionTargets.tickets.contains(it) }?.let { existingSessionPendingIntent(it) } else null
-            val value = Notification.Builder(context, RUNNING_CHANNEL).setSmallIcon(R.drawable.ic_service)
-                .setContentTitle(title).setContentText(stateText).setStyle(Notification.BigTextStyle().bigText("$stateText\n$detail"))
+            val builder = Notification.Builder(context, RUNNING_CHANNEL).setSmallIcon(R.drawable.ic_service)
+                .setContentTitle(title).setContentText(content).setStyle(Notification.BigTextStyle().bigText("$content\n$detail"))
                 .setContentIntent(open ?: sessionPendingIntent(summary.sessionId, id)).setGroup(RUNNING_GROUP)
                 .setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(public).setOnlyAlertOnce(true).setOngoing(true)
-                .setCategory(Notification.CATEGORY_PROGRESS).build()
+                .setCategory(Notification.CATEGORY_PROGRESS)
+            RuntimeLiveUpdates.request(builder, DshUiLanguage.text(context, when {
+                summary.state == "waiting" -> R.string.live_waiting_short
+                summary.activity?.phase == "thinking" -> R.string.live_thinking_short
+                summary.activity?.phase == "responding" -> R.string.live_responding_short
+                else -> R.string.live_tool_short
+            }))
+            val value = builder.build()
             runCatching { manager.notify(notificationTag(id), TASK_NOTIFICATION_ID, value) }.onSuccess { progressNotifications.add(id) }.onFailure { revokeTicket(id) }
         }
     }
