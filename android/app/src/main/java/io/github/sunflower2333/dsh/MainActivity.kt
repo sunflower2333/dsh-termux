@@ -26,6 +26,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.URLUtil
@@ -132,6 +133,10 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(AndroidAppearance.theme(this))
         super.onCreate(savedInstanceState)
+        // Keep the WebView in resize mode on API 30 and on edge-to-edge API 35.
+        // Some OEMs retain a one-frame pan after IME dismissal when this is
+        // left solely to the manifest attribute.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         // Userdebug Android images can enable WebView debugging by default.
         // Set both build modes explicitly before creating the WebView.
         WebView.setWebContentsDebuggingEnabled(
@@ -232,11 +237,10 @@ class MainActivity : Activity() {
                 val keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
                 if (keyboardWasVisible && !keyboardVisible) {
                     // WebView can keep the native pan it applied to a focused
-                    // input after IME dismissal. Recenter fixed DSH dialogs
-                    // without changing any chat/list element's scroll position.
-                    view.post {
-                        if (::webView.isInitialized) webView.scrollTo(0, 0)
-                    }
+                    // input after IME dismissal. Recenter only the onboarding
+                    // dialog; resetting a chat scroll position would be a
+                    // surprising side effect.
+                    resetOnboardingImePan()
                 }
                 keyboardWasVisible = keyboardVisible
                 insets
@@ -370,8 +374,48 @@ class MainActivity : Activity() {
             setOnClickListener { showErrorDetails() }
         }
         root.addView(errorBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        // ColorOS and a few Android 11 WebView builds occasionally omit the
+        // final IME insets callback. The visible display frame gives us a
+        // second, independent edge for the same transition.
+        root.viewTreeObserver.addOnGlobalLayoutListener {
+            val frame = android.graphics.Rect()
+            root.getWindowVisibleDisplayFrame(frame)
+            val keyboardVisible = root.height > 0 && root.height - frame.bottom > root.height / 5
+            if (keyboardWasVisible && !keyboardVisible) resetOnboardingImePan()
+            keyboardWasVisible = keyboardVisible
+        }
         root.post { root.requestApplyInsets() }
         return root
+    }
+
+    private fun resetOnboardingImePan() {
+        if (!::webView.isInitialized || terminalError || isFinishing || isDestroyed) return
+        val script = """
+            (function () {
+              const dialog = document.querySelector('.jLrgrW_dialog');
+              if (!dialog) return false;
+              const active = document.activeElement;
+              if (active && active.matches('input,textarea,[contenteditable="true"]')) active.blur();
+              document.documentElement.dataset.dshAndroidImeRestored = 'true';
+              window.scrollTo(0, 0);
+              document.documentElement.scrollTop = 0;
+              document.body.scrollTop = 0;
+              if (window.visualViewport && window.visualViewport.scrollTo) window.visualViewport.scrollTo(0, 0);
+              return true;
+            })();
+        """.trimIndent()
+        // The platform may apply its final pan after dispatching insets. Repeat
+        // at the end of the current frame and after the OEM animation settles.
+        listOf(0L, 80L, 240L, 600L).forEach { delay ->
+            handler.postDelayed({
+                if (!::webView.isInitialized || isFinishing || isDestroyed) return@postDelayed
+                webView.evaluateJavascript(script, null)
+                webView.translationX = 0f
+                webView.translationY = 0f
+                webView.scrollTo(0, 0)
+                webView.requestLayout()
+            }, delay)
+        }
     }
 
     @Suppress("DEPRECATION")

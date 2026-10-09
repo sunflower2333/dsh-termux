@@ -634,6 +634,19 @@
     padding: 12px !important;
     overflow: hidden !important;
   }
+  /* Android may retain the WebView's focused-input pan for one frame after
+     the IME closes. The native bridge marks the restore pass and the real
+     modal remains a centered, fixed surface during that pass. */
+  html[data-dsh-android-native][data-dsh-android-ime-restored="true"] ._root_o6lrb_6 {
+    align-items: center !important;
+    justify-content: center !important;
+    transform: none !important;
+  }
+  html[data-dsh-android-native][data-dsh-android-ime-restored="true"] .jLrgrW_dialog {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    transform: none !important;
+  }
   html[data-dsh-android-native] .jLrgrW_dialog {
     max-height: 100% !important;
     overflow: hidden !important;

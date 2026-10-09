@@ -14,7 +14,7 @@
   var snapshot = Object.freeze({ status: null, error: null, connected: false });
   var reasons = ["disabled", "disconnected", "device_locked", "user_paused", "user_grant", "host_started", "host_stopped", "service_disconnected", "service_interrupted", "unavailable"];
   var errors = ["invalid_request", "user_gesture_required", "control_unavailable", "settings_unavailable", "permission_request_pending", "unavailable"];
-  var actions = ["open-accessibility", "allow-control", "pause-control", "set-feedback", "open-notifications", "open-live-updates", "open-battery"];
+  var actions = ["open-accessibility", "allow-control", "pause-control", "set-feedback", "open-notifications", "open-battery"];
 
   function nullableCount(value) {
     return value === null || (Number.isSafeInteger(value) && value >= 0);
@@ -69,7 +69,7 @@
         sessions: sessions, sessionsComplete: r.sessionsComplete }),
       notifications: Object.freeze({ enabled: n.enabled, permissionRequired: n.permissionRequired,
         permissionGranted: n.permissionGranted, channelsDisabled: n.channelsDisabled,
-        liveUpdatesSupported: n.liveUpdatesSupported === true, liveUpdatesEnabled: n.liveUpdatesEnabled === true }),
+        }),
       battery: Object.freeze({ unrestricted: b.unrestricted })
     });
   }

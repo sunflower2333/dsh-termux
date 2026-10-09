@@ -46,14 +46,15 @@ disconnected conversation loses its ongoing notification. The notification
 keeps its per-session counters and opens the exact conversation when tapped.
 Private lock-screen content uses a generic public version.
 
-On Android 16, including ColorOS 16, these ongoing notifications request
+Live previews are requested automatically; DSH has no app-level switch for
+them. On Android 16, including ColorOS 16, ongoing notifications request
 promotion through Android's Live Updates API, the public Fluid Cloud entry
-point. The system decides eligibility and presentation. In DSH **Settings →
-Background**, **Live update settings** opens the system promotion settings,
-falling back to app notification settings on devices without that screen.
-Allow live updates there; ordinary conversation notifications remain available
-on Android 11–15. No media playback, overlay, vendor whitelist bypass or root
-permission is used. Labels follow DSH's selected English/Chinese language.
+point. Xiaomi HyperOS and vivo OriginOS receive the same standard ongoing
+notification with bounded content updates, which lets each system apply its
+own island/atomic-notification policy when eligible. OEM eligibility and the
+user's system notification policy remain authoritative. No media playback,
+overlay, vendor whitelist bypass or root permission is used. Labels follow
+DSH's selected English/Chinese language.
 
 Switching apps or closing the chat Activity does not stop the foreground DSH
 service. The server owns the active conversation, not the WebView. Its native
@@ -418,5 +419,6 @@ python3 scripts/test-android-model-dialogs.py /path/to/staged/dsh \
 
 `--prepare-only` produces the same production-component fixture for WebView
 testing. Browser resizing checks layout; physical Android IME dismissal and
-touch gestures still need device/emulator verification. ColorOS Fluid Cloud
-presentation must be checked on a compatible ColorOS 16 device.
+touch gestures still need device/emulator verification. OEM island/atomic
+notification presentation must be checked on compatible ColorOS 16, HyperOS,
+or OriginOS devices.

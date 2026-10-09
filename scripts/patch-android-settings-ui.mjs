@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const MARKER = "/* dsh-android-web-settings-ui-v1 */";
 const LEGACY_SECTIONS_SHA = "069865fa21ab2b0719e7294deb985a8757fa4c80f240b8127c3c0360426691e0";
 const PRE_LIVE_SECTIONS_SHA = "d9505e551bc75e4ce825691c1a16d19adb5481dcaf9e9f7b631434e27dfabf66";
+const PRE_AUTO_LIVE_SECTIONS_SHA = "e545a19cc3aee545c24da8bb9c0a146af0c38c81d513a6cc714b521bddd06f6b";
+const REMOVED_LIVE_KEYS = ["androidRuntime.liveUpdates", "androidRuntime.liveHelp", "androidRuntime.liveSettings"];
 const BEGIN = "    function AndroidMobileUseSection({ t }) {";
 const END = "    function GeneralSection({ renderSlot }) {";
 const SCRIPT_TAG = '<script data-dsh-android-settings src="./assets/dsh-android-settings-ui.js"></script>';
@@ -244,14 +246,9 @@ const sectionCode = `    const androidSettingsStyleId = "@deepseek-ai/dsh-client
             (0, react_jsx_runtime.jsx)(AndroidSettingsRow, { label: t("androidRuntime.battery"), value: !status ? unknown : t(status.battery.unrestricted ? "androidRuntime.unrestricted" : "androidRuntime.optimized") })
           ] }),
           (0, react_jsx_runtime.jsx)("p", { children: t("androidRuntime.notifications") }),
-          notifications && notifications.liveUpdatesSupported && (0, react_jsx_runtime.jsxs)("div", { children: [
-            (0, react_jsx_runtime.jsx)(AndroidSettingsRow, { label: t("androidRuntime.liveUpdates"), value: t(notifications.liveUpdatesEnabled ? "androidSettings.on" : "androidSettings.off") }),
-            (0, react_jsx_runtime.jsx)("p", { children: t("androidRuntime.liveHelp") })
-          ] }),
           notifications && notifications.channelsDisabled && (0, react_jsx_runtime.jsx)("p", { children: t("androidRuntime.channelHelp") }),
           (0, react_jsx_runtime.jsxs)("div", { className: "dshAndroidSettingsActions", children: [
             (0, react_jsx_runtime.jsx)(AndroidSettingsButton, { t, label: notifications && notifications.permissionRequired && !notifications.permissionGranted ? "androidRuntime.allowNotifications" : "androidRuntime.notificationSettings", type: "open-notifications", busy, connected: state.connected, perform }),
-            notifications && notifications.liveUpdatesSupported && (0, react_jsx_runtime.jsx)(AndroidSettingsButton, { t, label: "androidRuntime.liveSettings", type: "open-live-updates", busy, connected: state.connected, perform }),
             (0, react_jsx_runtime.jsx)(AndroidSettingsButton, { t, label: "androidRuntime.batterySettings", type: "open-battery", busy, connected: state.connected, perform })
           ] }),
           (0, react_jsx_runtime.jsx)("p", { children: t("androidRuntime.batteryHelp") }),
@@ -263,9 +260,6 @@ const sectionCode = `    const androidSettingsStyleId = "@deepseek-ai/dsh-client
 
 const dictionaries = {
   zh: {
-    "androidRuntime.liveUpdates": "实时通知 / 流体云",
-    "androidRuntime.liveHelp": "实时显示当前会话的思考和回答片段。ColorOS 16 的流体云展示由系统决定，请在系统设置中允许实时通知。锁屏隐藏内容时不显示片段。",
-    "androidRuntime.liveSettings": "实时通知设置",
     "androidSettings.checking": "正在读取状态…",
     "androidSettings.on": "已开启", "androidSettings.off": "未开启",
     "androidSettings.connected": "已连接", "androidSettings.disconnected": "未连接",
@@ -314,9 +308,6 @@ const dictionaries = {
     "androidRuntime.batteryHelp": "后台任务易被中断时，可在系统中调整电池限制。不同厂商的后台策略可能仍影响运行。"
   },
   en: {
-    "androidRuntime.liveUpdates": "Live updates / Fluid Cloud",
-    "androidRuntime.liveHelp": "Show live thinking and response previews. ColorOS 16 controls Fluid Cloud presentation; allow live updates in system settings. Previews stay hidden when lock-screen content is hidden.",
-    "androidRuntime.liveSettings": "Live update settings",
     "androidSettings.checking": "Reading status…",
     "androidSettings.on": "On", "androidSettings.off": "Off",
     "androidSettings.connected": "Connected", "androidSettings.disconnected": "Disconnected",
@@ -379,7 +370,16 @@ function dictionaryPatch(source, language) {
     if (entries.length === 1) body = body.replace(expression, (_, prefix) => prefix + JSON.stringify(value));
     else additions.push(`      ${JSON.stringify(key)}: ${JSON.stringify(value)},`);
   }
+  if (additions.length === 0 && body === match[2]) return source;
   return source.replace(match[0], match[1] + "\n" + additions.join("\n") + body + match[3]);
+}
+
+function dictionaryRemove(source, language, keys) {
+  for (const key of keys) {
+    const expression = new RegExp(`\\n[ \\t]*"${key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}": (?:"(?:[^"\\\\]|\\\\.)*"|[^,\\n]+),?`, "g");
+    source = source.replace(expression, "");
+  }
+  return source;
 }
 
 /** Runs after the existing Android navigation/runtime section patch. */
@@ -393,9 +393,12 @@ export async function patchAndroidSettingsUi(root) {
   }
   if (source.includes(MARKER)) {
     const previousStart = source.indexOf('    const androidSettingsStyleId =');
-    const previous = previousStart >= 0 && previousStart < start &&
-      createHash("sha256").update(source.slice(previousStart, end)).digest("hex") === PRE_LIVE_SECTIONS_SHA;
-    if (source.split(MARKER).length !== 2 || (!previous && source.split(sectionCode).length !== 2) ||
+    const previousHash = previousStart >= 0 && previousStart < start ?
+      createHash("sha256").update(source.slice(previousStart, end)).digest("hex") : null;
+    const previous = previousHash === PRE_LIVE_SECTIONS_SHA;
+    const previousAutoLive = previousHash === PRE_AUTO_LIVE_SECTIONS_SHA;
+    const replacePrevious = previous || previousAutoLive;
+    if (source.split(MARKER).length !== 2 || (!replacePrevious && source.split(sectionCode).length !== 2) ||
       source.split(OPENER_CODE).length !== 2 ||
       source.split(LOCALE_CODE).length !== 2 ||
       source.includes('window.location.assign("/__dsh_android__/mobile-control")') ||
@@ -407,12 +410,13 @@ export async function patchAndroidSettingsUi(root) {
       if (!match) throw new Error("dsh Android settings UI: damaged dictionary");
       const values = JSON.parse(match[1]);
       for (const [key, value] of Object.entries(dictionaries[language])) {
-        if (previous && ["androidRuntime.liveUpdates", "androidRuntime.liveHelp", "androidRuntime.liveSettings"].includes(key) && values[key] === undefined) continue;
         if (values[key] !== value) throw new Error(`dsh Android settings UI: damaged ${language}.${key}`);
       }
     }
-    if (previous) {
+    if (replacePrevious) {
       source = source.slice(0, previousStart) + sectionCode + source.slice(end);
+      if (previousAutoLive) source = dictionaryRemove(source, "zh", REMOVED_LIVE_KEYS);
+      if (previousAutoLive) source = dictionaryRemove(source, "en", REMOVED_LIVE_KEYS);
       source = dictionaryPatch(dictionaryPatch(source, "zh"), "en");
     }
   } else {
